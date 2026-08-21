@@ -149,8 +149,9 @@
 
 .reader-content {
   flex: 1;
-  overflow-y: auto;
+  overflow: hidden;
   position: relative;
+  min-height: 0;
 }
 
 .reader-track {
@@ -163,6 +164,106 @@
   color: var(--reader-text);
   min-height: 100%;
   box-sizing: border-box;
+}
+
+.reader-mode-scroll {
+  overflow-y: auto;
+}
+
+.reader-mode-scroll .reader-track {
+  margin: 0 auto;
+}
+
+.reader-mode-paged {
+  overflow-x: hidden;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+}
+
+.reader-mode-paged .reader-track {
+  height: 100%;
+  width: calc(var(--reader-page-width, 720px) + 80px);
+  max-width: none;
+  margin: 0;
+  column-width: var(--reader-page-width, 720px);
+  column-gap: 0;
+  column-fill: auto;
+  padding: 40px;
+  overflow: visible;
+}
+
+.reader-mode-paged .reader-track > p,
+.reader-mode-paged .reader-track > h1,
+.reader-mode-paged .reader-track > h2,
+.reader-mode-paged .reader-track > h3,
+.reader-mode-paged .reader-track > h4,
+.reader-mode-paged .reader-track > h5,
+.reader-mode-paged .reader-track > h6,
+.reader-mode-paged .reader-track > li,
+.reader-mode-paged .reader-track > blockquote {
+  break-inside: avoid;
+}
+
+.reader-mode-paged .reader-track img,
+.reader-mode-paged .reader-track table,
+.reader-mode-paged .reader-track pre,
+.reader-mode-paged .reader-track blockquote {
+  break-inside: auto;
+}
+
+.page-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 18%;
+  z-index: 5;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.page-zone:hover {
+  opacity: 0.06;
+  background: var(--accent);
+}
+
+.page-zone-prev { left: 0; }
+.page-zone-next { right: 0; }
+
+.reader-pagination {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 4px 16px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.pagination-progress {
+  color: var(--text-muted);
+}
+
+.pagination-button {
+  width: 28px;
+  height: 26px;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.pagination-button:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.pagination-button:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .reader-track h1,
