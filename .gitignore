@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.npm-cache/
+.codegraph/
+.opencode/
+src-tauri/target/
+src-tauri/gen/
+.env
+.env.*
+!.env.example

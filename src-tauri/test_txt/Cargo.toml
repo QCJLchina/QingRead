@@ -1,0 +1,12 @@
+[package]
+name = "test_txt"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "test_txt"
+path = "test_txt.rs"
+
+[dependencies]
+epubreader = { path = "." }
+anyhow = "1"

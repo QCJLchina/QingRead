@@ -1,0 +1,55 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicklasoverworlds/tauri/v2/tooling/cli/schema.json",
+  "productName": "EpubReader",
+  "version": "2.0.0",
+  "identifier": "com.epubreader.app",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "EpubReader 电子书阅读器",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "trayIcon": {
+      "iconPath": "icons/icon.ico",
+      "iconAsTemplate": true
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "nsis",
+    "icon": [
+      "icons/32x32.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/256x256.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../README.md": "./README.md"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "languages": ["English", "SimpChinese"],
+        "displayLanguageSelector": false,
+        "startMenuFolder": "EpubReader"
+      }
+    }
+  },
+  "plugins": {}
+}
