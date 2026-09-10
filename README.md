@@ -52,10 +52,11 @@
 
 安装目录默认 `C:\Program Files\QingRead\`，数据存储在 `%APPDATA%\EpubReader\`（沿用旧目录名，升级后书架与进度不丢失）。
 
-### 方式二：绿色版
+### 方式二：绿色版（免安装）
 
-1. 将 `qingread.exe` 放到任意目录
-2. 双击运行，首次启动会在 `%APPDATA%\EpubReader\` 创建数据目录
+1. 解压 `QingRead_3.0.0_x64-portable.zip` 到任意目录
+2. 双击其中的 `qingread.exe` 运行，首次启动会在 `%APPDATA%\EpubReader\` 创建数据目录
+3. 想换地方就整个目录挪走，不写注册表，卸载时直接删目录
 
 ---
 
@@ -240,8 +241,8 @@ npm run tauri build
 powershell -ExecutionPolicy Bypass -File .\build.ps1
 
 # 产物位置
-src-tauri\target\release\qingread.exe                            # 绿色版
-src-tauri\target\release\bundle\nsis\QingRead_3.0.0_x64-setup.exe    # NSIS 安装器
+src-tauri\target\release\qingread.exe                                # 绿色版可执行文件
+src-tauri\target\release\bundle\nsis\QingRead_3.0.0_x64-setup.exe  # NSIS 安装器
 ```
 
 `build.ps1` 优先使用项目内 `.tools\cargo-home` 的 Rust 工具链（若存在），否则回退到 PATH 上的 cargo；两者都没有时会明确报错。
@@ -256,6 +257,28 @@ replace-with = "ustc"
 [source.ustc]
 registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
 ```
+
+## 发布
+
+推 `v*` 标签会触发 GitHub Actions 流水线（`.github/workflows/release.yml`）：
+在 windows-latest 上装 Node 24 与 Rust、跑前端与 Rust 测试、执行 `npm run tauri build`，
+然后创建 **draft release** 并附上两个产物。流水线不签名，也不需要任何 Secrets。
+
+| 产物 | 说明 |
+|------|------|
+| `QingRead_<版本>_x64-setup.exe` | NSIS 安装器 |
+| `QingRead_<版本>_x64-portable.zip` | 绿色版压缩包，内含 `qingread.exe` |
+
+发布步骤：先把版本号改好并提交（`package.json` 与 `src-tauri/tauri.conf.json` 必须一致，
+流水线会校验），再去 Actions 页手动 Run workflow 干跑一次确认构建通过，最后打标签：
+
+```powershell
+git tag -a v3.0.0 -m "轻阅 v3.0.0"
+git push origin v3.0.0
+```
+
+标签必须与版本号一致（`v3.0.0` 对应 `3.0.0`），对不上流水线会直接失败。
+流水线只创建 draft release，release notes 需要你在网页上补充后再手动 Publish。
 
 ---
 
