@@ -8,5 +8,5 @@ name = "test_txt"
 path = "test_txt.rs"
 
 [dependencies]
-epubreader = { path = "." }
+qingread = { path = "." }
 anyhow = "1"

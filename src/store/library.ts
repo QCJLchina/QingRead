@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { libraryApi, progressApi } from "../api/index.ts";
+import type { ProgressSummary } from "../api/index.ts";
 import type { BookInfo } from "../types";
 
 interface LibraryState {
@@ -7,6 +8,10 @@ interface LibraryState {
   loading: boolean;
   error: string | null;
   selectedIds: Set<string>;
+  /** book_id -> 最近一次阅读进度 */
+  progress: Record<string, ProgressSummary>;
+  /** 最近在读的书，用于书架顶部的「继续阅读」 */
+  recentBookId: string | null;
 
   loadBooks: () => Promise<void>;
   importBook: (path: string) => Promise<BookInfo | null>;
@@ -18,76 +23,107 @@ interface LibraryState {
   clearError: () => void;
 }
 
+function pickRecent(
+  books: BookInfo[],
+  progress: ProgressSummary[],
+): { recentBookId: string | null; map: Record<string, ProgressSummary> } {
+  const map: Record<string, ProgressSummary> = {};
+  const ids = new Set(books.map((book) => book.id));
+  for (const item of progress) {
+    if (!ids.has(item.book_id)) continue;
+    map[item.book_id] = item;
+  }
+  const candidates = Object.values(map).sort((a, b) => b.last_read - a.last_read);
+  return { recentBookId: candidates.length > 0 ? candidates[0].book_id : null, map };
+}
+
 export const useLibraryStore = create<LibraryState>((set, get) => ({
   books: [],
   loading: false,
   error: null,
   selectedIds: new Set(),
+  progress: {},
+  recentBookId: null,
 
   loadBooks: async () => {
     set({ loading: true, error: null });
     try {
-      const books = await invoke<BookInfo[]>("list_books");
-      set({ books, loading: false });
-    } catch (e) {
-      set({ error: String(e), loading: false });
+      const [books, progress] = await Promise.all([
+        libraryApi.list(),
+        progressApi.list().catch(() => [] as ProgressSummary[]),
+      ]);
+      const picked = pickRecent(books, progress);
+      set({
+        books,
+        loading: false,
+        progress: picked.map,
+        recentBookId: picked.recentBookId,
+      });
+    } catch (error) {
+      set({ error: String(error), loading: false });
     }
   },
 
-  importBook: async (path: string) => {
+  importBook: async (path) => {
     try {
-      const book = await invoke<BookInfo>("import_book", { path });
+      const book = await libraryApi.import(path);
       set({ books: [...get().books, book] });
       return book;
-    } catch (e) {
-      set({ error: String(e) });
-      throw e;
+    } catch (error) {
+      set({ error: String(error) });
+      throw error;
     }
   },
 
-  removeBook: async (bookId: string) => {
+  removeBook: async (bookId) => {
     try {
-      await invoke("remove_book", { bookId });
-      const { selectedIds } = get();
-      const newSelected = new Set(selectedIds);
-      newSelected.delete(bookId);
+      await libraryApi.remove(bookId);
+      const selectedIds = new Set(get().selectedIds);
+      selectedIds.delete(bookId);
+      const progress = { ...get().progress };
+      delete progress[bookId];
       set({
-        books: get().books.filter((b) => b.id !== bookId),
-        selectedIds: newSelected,
+        books: get().books.filter((book) => book.id !== bookId),
+        selectedIds,
+        progress,
+        recentBookId: get().recentBookId === bookId ? null : get().recentBookId,
       });
-    } catch (e) {
-      set({ error: String(e) });
+    } catch (error) {
+      set({ error: String(error) });
     }
   },
 
-  batchRemoveBooks: async (bookIds: string[]) => {
+  batchRemoveBooks: async (bookIds) => {
     try {
-      await invoke("batch_remove_books", { bookIds });
-      const idSet = new Set(bookIds);
+      await libraryApi.batchRemove(bookIds);
+      const removed = new Set(bookIds);
+      const progress = { ...get().progress };
+      for (const id of bookIds) delete progress[id];
+      const recent = get().recentBookId;
       set({
-        books: get().books.filter((b) => !idSet.has(b.id)),
+        books: get().books.filter((book) => !removed.has(book.id)),
         selectedIds: new Set(),
+        progress,
+        recentBookId: recent && removed.has(recent) ? null : recent,
       });
-    } catch (e) {
+    } catch (error) {
       await get().loadBooks();
-      set({ error: String(e), selectedIds: new Set() });
+      set({ error: String(error), selectedIds: new Set() });
     }
   },
 
-  toggleSelect: (bookId: string) => {
-    const { selectedIds } = get();
-    const newSelected = new Set(selectedIds);
-    if (newSelected.has(bookId)) {
-      newSelected.delete(bookId);
+  toggleSelect: (bookId) => {
+    const selectedIds = new Set(get().selectedIds);
+    if (selectedIds.has(bookId)) {
+      selectedIds.delete(bookId);
     } else {
-      newSelected.add(bookId);
+      selectedIds.add(bookId);
     }
-    set({ selectedIds: newSelected });
+    set({ selectedIds });
   },
 
   selectAll: () => {
-    const { books } = get();
-    set({ selectedIds: new Set(books.map((b) => b.id)) });
+    set({ selectedIds: new Set(get().books.map((book) => book.id)) });
   },
 
   clearSelection: () => {

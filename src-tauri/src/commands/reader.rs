@@ -11,25 +11,31 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
 
-/// 把所有 load_chapter 流程日志写到 %USERPROFILE%\epubreader-debug.log，
+/// 把所有 load_chapter 流程日志写到 %USERPROFILE%\qingread-debug.log，
 /// 这样用户用安装包跑时也能拿到诊断信息
 fn debug_log(msg: &str) {
     if !debug_logging_enabled() {
         return;
     }
     if let Some(home) = std::env::var_os("USERPROFILE") {
-        let path = std::path::PathBuf::from(home).join("epubreader-debug.log");
+        let path = std::path::PathBuf::from(home).join("qingread-debug.log");
         if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
             let _ = writeln!(f, "{}", msg);
         }
     }
 }
 
+/// 识别 QINGREAD_DEBUG；旧的 EPUBREADER_DEBUG 仍然有效，
+/// 免得既有的排查脚本在改名后失效。
 fn debug_logging_enabled() -> bool {
-    match std::env::var("EPUBREADER_DEBUG") {
-        Ok(value) => !value.is_empty() && value != "0" && value.to_ascii_lowercase() != "false",
-        Err(_) => false,
+    for key in ["QINGREAD_DEBUG", "EPUBREADER_DEBUG"] {
+        if let Ok(value) = std::env::var(key) {
+            if !value.is_empty() && value != "0" && value.to_ascii_lowercase() != "false" {
+                return true;
+            }
+        }
     }
+    false
 }
 
 /// 已 sanitize 的章节缓存：key = (book_id, chapter_index)，value = ChapterData
@@ -450,7 +456,7 @@ mod tests {
 
     #[test]
     fn resolves_managed_book_path_from_library_entry() {
-        let temp = std::env::temp_dir().join(format!("epubreader-reader-test-{}", uuid::Uuid::new_v4()));
+        let temp = std::env::temp_dir().join(format!("qingread-reader-test-{}", uuid::Uuid::new_v4()));
         let store = crate::storage::store::Store::new(Some(temp.clone()));
         let book_id = "book-1";
         let managed = store.paths.book_path(book_id, "epub");
@@ -476,7 +482,7 @@ mod tests {
 
     #[test]
     fn refuses_unsafe_book_id_before_touching_library() {
-        let temp = std::env::temp_dir().join(format!("epubreader-reader-test-{}", uuid::Uuid::new_v4()));
+        let temp = std::env::temp_dir().join(format!("qingread-reader-test-{}", uuid::Uuid::new_v4()));
         let store = crate::storage::store::Store::new(Some(temp.clone()));
         assert!(resolve_book_path(&store, "../escape").unwrap().is_none());
         std::fs::remove_dir_all(temp).unwrap();

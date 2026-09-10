@@ -5,25 +5,22 @@ export default function TopBar() {
   const location = useLocation();
 
   return (
-    <div className="top-bar">
-      <Link to="/" className="logo" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <BookLogo size={28} />
-        <span>EpubReader</span>
+    <header className="top-bar">
+      <Link to="/" className="logo">
+        <BookLogo size={26} />
+        <span>轻阅</span>
       </Link>
-      <div className="nav-links">
-        <Link
-          to="/"
-          className={`nav-link ${location.pathname === "/" ? "active" : ""}`}
-        >
+      <nav className="nav-links" aria-label="主导航">
+        <Link to="/" className={"nav-link" + (location.pathname === "/" ? " is-active" : "")}>
           书架
         </Link>
         <Link
           to="/settings"
-          className={`nav-link ${location.pathname === "/settings" ? "active" : ""}`}
+          className={"nav-link" + (location.pathname === "/settings" ? " is-active" : "")}
         >
           设置
         </Link>
-      </div>
-    </div>
+      </nav>
+    </header>
   );
 }

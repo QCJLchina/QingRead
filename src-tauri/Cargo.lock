@@ -828,35 +828,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "epubreader"
-version = "2.0.0"
-dependencies = [
- "ammonia",
- "anyhow",
- "async-trait",
- "base64 0.21.7",
- "dirs 5.0.1",
- "image",
- "keyring",
- "once_cell",
- "percent-encoding",
- "quick-xml 0.31.0",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-shell",
- "thiserror 1.0.69",
- "tokio",
- "url",
- "uuid",
- "zip",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2801,6 +2772,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "qingread"
+version = "3.0.0"
+dependencies = [
+ "ammonia",
+ "anyhow",
+ "async-trait",
+ "base64 0.21.7",
+ "dirs 5.0.1",
+ "image",
+ "keyring",
+ "once_cell",
+ "percent-encoding",
+ "quick-xml 0.31.0",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-shell",
+ "thiserror 1.0.69",
+ "tokio",
+ "url",
+ "uuid",
+ "zip",
 ]
 
 [[package]]

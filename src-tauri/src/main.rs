@@ -2,6 +2,7 @@
 
 mod commands;
 mod epub;
+mod hotkey;
 mod state;
 mod storage;
 mod sync;
@@ -73,6 +74,37 @@ impl LruCache {
 static EPUB_ASSET_CACHE: Lazy<Mutex<LruCache>> =
     Lazy::new(|| Mutex::new(LruCache::new(200, 64 * 1024 * 1024)));
 
+/// 窗口拖动/缩放的防抖序号。连续事件只保留最后一次写入。
+static LAYOUT_SAVE_GENERATION: Lazy<Mutex<u64>> = Lazy::new(|| Mutex::new(0));
+
+/// 用户拖动窗口边框或移动窗口后，延迟记录最终的尺寸与位置。
+/// 拖动过程中事件非常密集，这里用序号做防抖：只有最后一次落盘。
+fn schedule_layout_save(app: &tauri::AppHandle) {
+    let generation = {
+        let mut guard = match LAYOUT_SAVE_GENERATION.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        *guard += 1;
+        *guard
+    };
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        let is_latest = LAYOUT_SAVE_GENERATION
+            .lock()
+            .map(|guard| *guard == generation)
+            .unwrap_or(false);
+        if !is_latest {
+            return;
+        }
+        if let Err(e) = commands::window::persist_current_layout(&app) {
+            eprintln!("[window] 保存窗口形态失败: {e}");
+        }
+    });
+}
+
 pub fn clear_epub_asset_cache() {
     let mut cache = EPUB_ASSET_CACHE.lock().unwrap();
     cache.map.clear();
@@ -110,6 +142,7 @@ fn main() {
             // Progress
             commands::progress::save_progress,
             commands::progress::load_progress,
+            commands::progress::list_progress,
             // Settings
             commands::settings::get_settings,
             commands::settings::save_settings,
@@ -122,12 +155,27 @@ fn main() {
             commands::sync::test_sync_connection,
             commands::sync::preview_sync,
             commands::sync::apply_sync,
+            // Window / 低干扰模式
+            commands::window::get_window_settings,
+            commands::window::save_window_settings,
+            commands::window::window_apply_layout,
+            commands::window::window_hide,
             // FS
             commands::fs_commands::reveal_in_folder,
             commands::fs_commands::get_app_version,
         ])
         .setup(|app| {
             tray::setup_tray(app)?;
+
+            // 先套用上次保存的窗口形态，再显示窗口，避免启动时先闪一个默认尺寸。
+            let window_settings = commands::window::apply_saved_layout_on_startup(app.handle());
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+
+            // 全局隐藏/恢复快捷键。注册失败只会没有快捷键，托盘菜单仍然可用。
+            hotkey::set_hotkey(app.handle().clone(), window_settings.hide_hotkey.clone());
 
             // 处理 CLI 启动参数：自动导入传入的 EPUB/TXT
             let args: Vec<String> = std::env::args().skip(1).collect();
@@ -174,6 +222,15 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if matches!(
+                    event,
+                    tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)
+                ) {
+                    schedule_layout_save(window.app_handle());
+                }
+            }
+
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
                     // 读取用户设置的关闭行为
@@ -186,6 +243,9 @@ fn main() {
                             .map(|s| s.load_settings().close_behavior)
                             .unwrap_or_else(|| "quit".to_string())
                     };
+
+                    // 退出前先记录窗口形态，下次启动能回到同一个位置和大小
+                    let _ = commands::window::persist_current_layout(window.app_handle());
 
                     match behavior.as_str() {
                         "minimize_to_tray" => {
@@ -517,7 +577,7 @@ mod tests {
     #[test]
     fn background_protocol_accepts_only_configured_path() {
         let temp_dir = std::env::temp_dir().join(format!(
-            "epubreader-bg-test-{}",
+            "qingread-bg-test-{}",
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&temp_dir).unwrap();
@@ -561,7 +621,7 @@ mod tests {
     #[test]
     fn source_path_must_be_managed_or_registered() {
         let temp_dir = std::env::temp_dir().join(format!(
-            "epubreader-path-test-{}",
+            "qingread-path-test-{}",
             uuid::Uuid::new_v4()
         ));
         let books_dir = temp_dir.join("books");

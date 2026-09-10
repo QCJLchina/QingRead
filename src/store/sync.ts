@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { syncApi } from "../api";
 import { useSettingsStore } from "./settings";
 import type {
   SyncConfigData,
@@ -61,7 +61,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
   loadConfig: async () => {
     try {
-      const config = await invoke<SyncConfigData>("get_sync_config");
+      const config = await syncApi.getConfig();
       set({
         serverUrl: config.server_url,
         username: config.username,
@@ -95,13 +95,13 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     }
     set({ error: null, message: null });
     try {
-      await invoke("set_sync_config", {
+      await syncApi.setConfig({
         serverUrl: serverUrl.trim(),
         username: username.trim(),
         password: passwordDraft,
         remoteDir: remoteDir.trim(),
       });
-      const config = await invoke<SyncConfigData>("get_sync_config");
+      const config = await syncApi.getConfig();
       set({
         serverUrl: config.server_url,
         username: config.username,
@@ -120,7 +120,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   clearConfig: async () => {
     set({ error: null, message: null });
     try {
-      await invoke("clear_sync_config");
+      await syncApi.clearConfig();
       set({
         serverUrl: "",
         username: "",
@@ -146,9 +146,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       return;
     }
     try {
-      await invoke("test_sync_connection", {
-        password: passwordDraft.trim() ? passwordDraft.trim() : null,
-      });
+      await syncApi.testConnection(passwordDraft.trim() ? passwordDraft.trim() : null);
       set({ testing: false, message: "WebDAV 连接成功" });
     } catch (e) {
       set({ testing: false, error: String(e) });
@@ -163,7 +161,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       return;
     }
     try {
-      const preview = await invoke<SyncPreview>("preview_sync");
+      const preview = await syncApi.preview();
       set({ preview, previewing: false });
     } catch (e) {
       set({ previewing: false, error: String(e) });
@@ -190,9 +188,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     }));
     set({ error: null, message: null, applying: true, progress: null });
     try {
-      const summary = await invoke<SyncSummary>("apply_sync", {
-        decisions: syncDecisions,
-      });
+      const summary = await syncApi.apply(syncDecisions);
       set({
         applying: false,
         progress: null,

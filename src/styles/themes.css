@@ -1,79 +1,100 @@
+/* 中性、低干扰的配色。阅读页尽量像一张纸，而不是一块面板。 */
 :root {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f5f5f5;
-  --bg-tertiary: #e8e8e8;
-  --text-primary: #1a1a1a;
-  --text-secondary: #666666;
-  --text-muted: #999999;
-  --border-color: #e0e0e0;
-  --accent: #4a90d9;
-  --accent-hover: #357abd;
-  --shadow: rgba(0, 0, 0, 0.1);
-  --shadow-lg: rgba(0, 0, 0, 0.15);
-  --reader-bg: #ffffff;
-  --reader-text: #1a1a1a;
-  --sidebar-bg: #f8f8f8;
+  color-scheme: light;
+
+  --bg-primary: #f6f7f4;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #eef1ea;
+  --text-primary: #2f3833;
+  --text-secondary: #5f6b63;
+  --text-muted: #8a948c;
+  --border-color: #e1e6de;
+  --accent: #3f6b4a;
+  --accent-hover: #345a3d;
+  --accent-soft: #e8efe6;
+  --accent-on: #ffffff;
+  --shadow: rgba(30, 45, 35, 0.07);
+  --shadow-lg: rgba(30, 45, 35, 0.12);
+
+  --reader-bg: #fffefb;
+  --reader-text: #2b332e;
+  --sidebar-bg: #f7f8f5;
   --card-bg: #ffffff;
-  --card-hover: #f0f0f0;
-  --overlay: rgba(0, 0, 0, 0.5);
+  --card-hover: #f3f5f0;
+  --overlay: rgba(24, 32, 27, 0.42);
 }
 
 [data-theme="dark"] {
-  --bg-primary: #1a1a1a;
-  --bg-secondary: #2a2a2a;
-  --bg-tertiary: #3a3a3a;
-  --text-primary: #e0e0e0;
-  --text-secondary: #a0a0a0;
-  --text-muted: #666666;
-  --border-color: #3a3a3a;
-  --accent: #5a9fe6;
-  --accent-hover: #4a8fd6;
-  --shadow: rgba(0, 0, 0, 0.3);
+  color-scheme: dark;
+
+  --bg-primary: #1d211e;
+  --bg-secondary: #242925;
+  --bg-tertiary: #2d332e;
+  --text-primary: #e2e7e1;
+  --text-secondary: #a6b0a7;
+  --text-muted: #7b857c;
+  --border-color: #363d37;
+  --accent: #9cc5a4;
+  --accent-hover: #b0d4b7;
+  --accent-soft: #2c3a30;
+  --accent-on: #17201a;
+  --shadow: rgba(0, 0, 0, 0.28);
   --shadow-lg: rgba(0, 0, 0, 0.4);
-  --reader-bg: #2a2a2a;
-  --reader-text: #e0e0e0;
-  --sidebar-bg: #222222;
-  --card-bg: #2a2a2a;
-  --card-hover: #3a3a3a;
-  --overlay: rgba(0, 0, 0, 0.7);
+
+  --reader-bg: #232823;
+  --reader-text: #dfe5df;
+  --sidebar-bg: #1f2420;
+  --card-bg: #242925;
+  --card-hover: #2d332e;
+  --overlay: rgba(0, 0, 0, 0.6);
 }
 
 [data-theme="sepia"] {
-  --bg-primary: #f4ecd8;
-  --bg-secondary: #efe6d0;
-  --bg-tertiary: #e5dcc8;
-  --text-primary: #5b4636;
-  --text-secondary: #7a6652;
-  --text-muted: #9a8a76;
-  --border-color: #d4c8b0;
-  --accent: #8b6914;
-  --accent-hover: #7b5904;
-  --shadow: rgba(91, 70, 54, 0.1);
-  --shadow-lg: rgba(91, 70, 54, 0.15);
-  --reader-bg: #f4ecd8;
-  --reader-text: #5b4636;
-  --sidebar-bg: #efe6d0;
-  --card-bg: #f4ecd8;
-  --card-hover: #efe6d0;
-  --overlay: rgba(91, 70, 54, 0.5);
+  color-scheme: light;
+
+  --bg-primary: #f2ebdb;
+  --bg-secondary: #f7f1e3;
+  --bg-tertiary: #e9e1cd;
+  --text-primary: #4d3f30;
+  --text-secondary: #6e5c48;
+  --text-muted: #94826d;
+  --border-color: #ddd2ba;
+  --accent: #86663a;
+  --accent-hover: #6f5430;
+  --accent-soft: #eadfc8;
+  --accent-on: #ffffff;
+  --shadow: rgba(77, 63, 48, 0.08);
+  --shadow-lg: rgba(77, 63, 48, 0.14);
+
+  --reader-bg: #f7f1e3;
+  --reader-text: #4a3d2f;
+  --sidebar-bg: #f2ebdb;
+  --card-bg: #f7f1e3;
+  --card-hover: #ece3cf;
+  --overlay: rgba(60, 48, 34, 0.4);
 }
 
 [data-theme="green"] {
-  --bg-primary: #c7edcc;
-  --bg-secondary: #b8e3be;
-  --bg-tertiary: #a9d9b0;
-  --text-primary: #1a3a1a;
-  --text-secondary: #2d5a2d;
-  --text-muted: #4a7a4a;
-  --border-color: #a9d9b0;
-  --accent: #2d8a2d;
-  --accent-hover: #1d7a1d;
-  --shadow: rgba(26, 58, 26, 0.1);
-  --shadow-lg: rgba(26, 58, 26, 0.15);
-  --reader-bg: #c7edcc;
-  --reader-text: #1a3a1a;
-  --sidebar-bg: #b8e3be;
-  --card-bg: #c7edcc;
-  --card-hover: #b8e3be;
-  --overlay: rgba(26, 58, 26, 0.5);
+  color-scheme: light;
+
+  --bg-primary: #e6f0e6;
+  --bg-secondary: #eef5ee;
+  --bg-tertiary: #dcebe0;
+  --text-primary: #24402a;
+  --text-secondary: #44614a;
+  --text-muted: #6d8873;
+  --border-color: #cfe0d3;
+  --accent: #35734a;
+  --accent-hover: #2b5f3d;
+  --accent-soft: #d8e9dc;
+  --accent-on: #ffffff;
+  --shadow: rgba(36, 64, 42, 0.08);
+  --shadow-lg: rgba(36, 64, 42, 0.14);
+
+  --reader-bg: #eaf4ea;
+  --reader-text: #22402a;
+  --sidebar-bg: #e6f0e6;
+  --card-bg: #eef5ee;
+  --card-hover: #dcebe0;
+  --overlay: rgba(28, 52, 34, 0.4);
 }

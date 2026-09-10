@@ -11,6 +11,13 @@ pub struct SettingsData {
     pub custom_bg_image: Option<String>,
     pub data_dir: Option<String>,
     pub close_behavior: String,
+    /// 阅读模式：paged / scroll。None 表示用户从未选择过。
+    #[serde(default)]
+    pub reading_mode: Option<String>,
+    #[serde(default)]
+    pub content_width: Option<f32>,
+    #[serde(default)]
+    pub content_padding: Option<f32>,
 }
 
 impl From<crate::storage::store::AppSettings> for SettingsData {
@@ -23,6 +30,9 @@ impl From<crate::storage::store::AppSettings> for SettingsData {
             custom_bg_image: s.custom_bg_image,
             data_dir: s.data_dir,
             close_behavior: s.close_behavior,
+            reading_mode: s.reading_mode,
+            content_width: s.content_width,
+            content_padding: s.content_padding,
         }
     }
 }
@@ -37,6 +47,9 @@ impl Into<crate::storage::store::AppSettings> for SettingsData {
             custom_bg_image: self.custom_bg_image,
             data_dir: self.data_dir,
             close_behavior: self.close_behavior,
+            reading_mode: self.reading_mode,
+            content_width: self.content_width,
+            content_padding: self.content_padding,
         }
     }
 }
@@ -64,7 +77,7 @@ pub async fn save_settings(
 
     // 关闭行为变更：实时更新托盘，不再需要重启
     if old_behavior != settings.close_behavior {
-        crate::tray::update_tray_for_behavior(&app, &settings.close_behavior);
+        crate::tray::refresh_tray(&app);
     }
 
     Ok(())
@@ -223,7 +236,7 @@ mod tests {
     #[test]
     fn copy_dir_recursive_merges_into_existing_destination() {
         let temp_dir = std::env::temp_dir().join(format!(
-            "epubreader-copy-test-{}",
+            "qingread-copy-test-{}",
             uuid::Uuid::new_v4()
         ));
         let src = temp_dir.join("src");

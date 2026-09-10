@@ -11,7 +11,13 @@ interface SearchResult {
 
 interface SearchPanelProps {
   onClose: () => void;
-  onJump: (chapterIndex: number) => void;
+  /** 跳到命中位置：章节 + 命中文本片段（用于在正文里定位并高亮） */
+  onJump: (chapterIndex: number, snippet: string) => void;
+}
+
+/** 去掉展示用的省略号，留下可直接在正文里查找的片段 */
+function anchorSnippet(text: string): string {
+  return text.replace(/^\.\.\./, "").replace(/\.\.\.$/, "").trim();
 }
 
 const DISPLAY_LIMIT = 50;
@@ -148,14 +154,15 @@ export default function SearchPanel({ onClose, onJump }: SearchPanelProps) {
         )}
 
         {results.slice(0, DISPLAY_LIMIT).map((result, i) => (
-          <div
+          <button
             key={i}
+            type="button"
             className="search-result-item"
-            onClick={() => onJump(result.chapterIndex)}
+            onClick={() => onJump(result.chapterIndex, anchorSnippet(result.text))}
           >
-            <div className="result-chapter">{result.chapterTitle}</div>
-            <div className="result-text">{highlightMatch(result.text, query)}</div>
-          </div>
+            <span className="result-chapter">{result.chapterTitle}</span>
+            <span className="result-text">{highlightMatch(result.text, query)}</span>
+          </button>
         ))}
 
         {results.length > DISPLAY_LIMIT && (

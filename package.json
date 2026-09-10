@@ -1,12 +1,12 @@
 {
-  "name": "epubreader",
+  "name": "qingread",
   "private": true,
-  "version": "2.0.0",
+  "version": "3.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "test": "node --test src/lib/search.test.ts src/lib/pagination.test.ts",
+    "test": "node --test src/lib/search.test.ts src/lib/pagination.test.ts src/lib/anchor.test.ts src/lib/window-presets.test.ts",
     "preview": "vite preview",
     "tauri": "tauri"
   },

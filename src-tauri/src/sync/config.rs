@@ -2,6 +2,10 @@ use crate::storage::store::{atomic_write_json, Store};
 use anyhow::{anyhow, Context};
 use serde::{Deserialize, Serialize};
 
+/// 系统凭据管理器里的服务名。
+///
+/// 兼容说明：产品已改名「轻阅 / QingRead」，但这个名字必须保持不变 ——
+/// 它是旧版存放 WebDAV 密码的位置，改名会让升级后的用户重新输入密码。
 pub const SYNC_SERVICE: &str = "EpubReader WebDAV";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +51,9 @@ impl SyncConfig {
     }
 }
 
+/// WebDAV 上的默认远端目录。
+///
+/// 兼容说明：保持旧名字，改掉会让已同步过的用户在新版本里看不到自己的书。
 fn default_remote_dir() -> String {
     "EpubReader".to_string()
 }

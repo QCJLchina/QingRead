@@ -1,134 +1,172 @@
-import { useEffect, useState } from "react";
-import { useLibraryStore } from "../store/library";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import BookCard from "../components/BookCard";
 import BookImporter from "../components/BookImporter";
 import BookLogo from "../components/BookLogo";
+import Icon from "../components/icons";
+import { useLibraryStore } from "../store/library";
+
+type LibraryView = "grid" | "list";
+const VIEW_KEY = "qingread.library.view";
 
 export default function LibraryPage() {
+  const navigate = useNavigate();
   const {
     books,
     loading,
     error,
     selectedIds,
+    recentBookId,
+    progress,
     loadBooks,
     batchRemoveBooks,
     selectAll,
     clearSelection,
+    clearError,
   } = useLibraryStore();
+
   const [selectionMode, setSelectionMode] = useState(false);
+  const [view, setView] = useState<LibraryView>(() => {
+    const stored = window.localStorage.getItem(VIEW_KEY);
+    return stored === "list" ? "list" : "grid";
+  });
 
   useEffect(() => {
-    loadBooks();
+    void loadBooks();
   }, [loadBooks]);
+
+  useEffect(() => {
+    window.localStorage.setItem(VIEW_KEY, view);
+  }, [view]);
+
+  const recentBook = useMemo(
+    () => books.find((book) => book.id === recentBookId) ?? null,
+    [books, recentBookId],
+  );
+
+  const recentEntry = recentBook ? progress[recentBook.id] : undefined;
 
   const handleBatchDelete = async () => {
     if (selectedIds.size === 0) return;
-    if (confirm(`确定要从书架移除选中的 ${selectedIds.size} 本书吗？`)) {
+    if (confirm("确定要从书架移除选中的 " + selectedIds.size + " 本书吗？")) {
       await batchRemoveBooks(Array.from(selectedIds));
       setSelectionMode(false);
     }
   };
 
-  const handleToggleMode = () => {
+  const toggleSelectionMode = () => {
     if (selectionMode) {
       clearSelection();
       setSelectionMode(false);
-    } else {
-      setSelectionMode(true);
+      return;
     }
+    setSelectionMode(true);
   };
 
   return (
     <div className="library-page">
-      <div className="library-header">
-        <h1>我的书架</h1>
-        <div className="actions" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <header className="library-header">
+        <div>
+          <div className="eyebrow">轻阅 · 书架</div>
+          <h1>我的书架</h1>
+        </div>
+        <div className="library-actions">
+          <div className="segmented">
+            <button
+              className={view === "grid" ? "is-active" : ""}
+              aria-pressed={view === "grid"}
+              onClick={() => setView("grid")}
+              title="封面视图"
+            >
+              <Icon name="grid" size={15} />
+            </button>
+            <button
+              className={view === "list" ? "is-active" : ""}
+              aria-pressed={view === "list"}
+              onClick={() => setView("list")}
+              title="紧凑列表"
+            >
+              <Icon name="list" size={15} />
+            </button>
+          </div>
           {selectionMode && (
             <>
-              <button onClick={selectAll} className="btn btn-secondary" style={{ fontSize: 13, padding: "4px 12px" }}>
-                全选
-              </button>
+              <button className="btn btn-secondary" onClick={selectAll}>全选</button>
               <button
-                onClick={handleBatchDelete}
-                className="btn btn-secondary"
+                className="btn btn-secondary danger"
                 disabled={selectedIds.size === 0}
-                style={{
-                  fontSize: 13,
-                  padding: "4px 12px",
-                  color: selectedIds.size > 0 ? "#c33" : undefined,
-                }}
+                onClick={handleBatchDelete}
               >
                 删除 ({selectedIds.size})
               </button>
             </>
           )}
           <button
-            onClick={handleToggleMode}
-            className={selectionMode ? "btn btn-primary" : "btn btn-secondary"}
-            style={{ fontSize: 13, padding: "4px 12px" }}
+            className={"btn " + (selectionMode ? "btn-primary" : "btn-secondary")}
+            onClick={toggleSelectionMode}
           >
             {selectionMode ? "取消" : "批量管理"}
           </button>
-          <span style={{ fontSize: "14px", color: "var(--text-secondary)" }}>
-            共 {books.length} 本书
-          </span>
+          <span className="library-count">{books.length} 本</span>
         </div>
-      </div>
+      </header>
 
       <BookImporter />
 
       {error && (
-        <div
-          style={{
-            padding: "12px 16px",
-            background: "#fee",
-            color: "#c33",
-            borderRadius: "6px",
-            marginBottom: "16px",
-            fontSize: "14px",
-          }}
-        >
+        <div className="notice notice-error" onClick={clearError} role="alert">
           {error}
+          <span className="notice-hint">（点击关闭）</span>
         </div>
       )}
 
-      {loading ? (
+      {loading && books.length === 0 ? (
         <div className="empty-state">
-            <div className="icon">⏳</div>
-            <div className="text">加载书架中...</div>
+          <div className="spinner" />
+          <div className="text">加载书架中…</div>
         </div>
       ) : books.length === 0 ? (
-        <div className="empty-state" style={{ padding: "48px 24px" }}>
-          <div className="icon">
-            <BookLogo size={96} />
-          </div>
-          <div className="title" style={{ fontSize: 20, marginTop: 16 }}>书架是空的</div>
-          <div className="text" style={{ maxWidth: 360, lineHeight: 1.6, marginTop: 8 }}>
-            支持 EPUB 和 TXT 格式。通过上方拖拽区域导入，或使用命令行：
-          </div>
-          <div
-            style={{
-              marginTop: 16,
-              padding: "12px 20px",
-              background: "var(--card-bg)",
-              border: "1px solid var(--border-color)",
-              borderRadius: 8,
-              fontFamily: "'Courier New', monospace",
-              fontSize: 13,
-              color: "var(--text-secondary)",
-              maxWidth: 420,
-              wordBreak: "break-all",
-            }}
-          >
-            epubreader.exe "D:\books\novel.epub"
-          </div>
+        <div className="empty-state">
+          <BookLogo size={88} />
+          <div className="title">书架是空的</div>
+          <div className="text">支持 EPUB 和 TXT。拖到上方区域、点击浏览文件，或用命令行：</div>
+          <code className="empty-code">qingread.exe "D:\books\novel.epub"</code>
         </div>
       ) : (
-        <div className="book-grid">
-          {books.map((book) => (
-            <BookCard key={book.id} book={book} selectionMode={selectionMode} />
-          ))}
-        </div>
+        <>
+          {recentBook && !selectionMode && (
+            <section className="resume-card">
+              <div className="resume-main">
+                <div className="eyebrow">继续阅读</div>
+                <strong>{recentBook.title}</strong>
+                <span className="resume-meta">
+                  {recentEntry ? "读到第 " + (recentEntry.chapter_index + 1) + " 章" : "刚刚打开过"}
+                </span>
+              </div>
+              <button
+                className="btn btn-primary"
+                onClick={() => navigate("/reader/" + recentBook.id)}
+              >
+                继续阅读
+                <Icon name="chevron-right" size={15} />
+              </button>
+            </section>
+          )}
+
+          {view === "grid" ? (
+            <div className="book-grid">
+              {books.map((book) => (
+                <BookCard key={book.id} book={book} selectionMode={selectionMode} view="grid" />
+              ))}
+            </div>
+          ) : (
+            <div className="book-list">
+              {books.map((book) => (
+                <BookCard key={book.id} book={book} selectionMode={selectionMode} view="list" />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

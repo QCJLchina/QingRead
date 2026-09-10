@@ -9,7 +9,6 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 pub use crate::sync::state::reset as reset_sync_state;
 
@@ -1412,6 +1411,7 @@ mod tests {
     use crate::sync::webdav::WebDavClient;
     use async_trait::async_trait;
     use std::sync::Arc;
+    use std::sync::Mutex;
 
     #[derive(Clone)]
     struct FakeWebDav {
@@ -1454,7 +1454,7 @@ mod tests {
 
     fn temp_paths() -> (AppPaths, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
-            "epubreader-sync-test-{}",
+            "qingread-sync-test-{}",
             uuid::Uuid::new_v4()
         ));
         let paths = AppPaths::new(Some(dir.clone()));

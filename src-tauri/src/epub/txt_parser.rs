@@ -50,7 +50,7 @@ mod tests {
     #[test]
     fn unmarked_txt_chunks_match_quick_scan_and_load() {
         let path = std::env::temp_dir()
-            .join(format!("epubreader-txt-unmarked-{}.txt", std::process::id()));
+            .join(format!("qingread-txt-unmarked-{}.txt", std::process::id()));
         let body = "测".repeat(120_000);
         std::fs::write(&path, format!("书名：测试\n作者：某人\n{}", body)).unwrap();
 
@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn single_marker_txt_is_one_chapter() {
         let path = std::env::temp_dir()
-            .join(format!("epubreader-txt-single-{}.txt", std::process::id()));
+            .join(format!("qingread-txt-single-{}.txt", std::process::id()));
         std::fs::write(&path, "书名：测试\n第一章\n正文内容\n").unwrap();
 
         let index = TxtParser::quick_scan(&path).unwrap();
@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn marked_txt_uses_exact_shared_boundaries() {
         let path = std::env::temp_dir()
-            .join(format!("epubreader-txt-marked-{}.txt", std::process::id()));
+            .join(format!("qingread-txt-marked-{}.txt", std::process::id()));
         std::fs::write(
             &path,
             "书名：测试\n作者：某人\n第一章\n开头\n第二章\n中间\n第三章\n结尾\n",

@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import Icon from "./icons";
 import { useLibraryStore } from "../store/library";
 import type { BookInfo } from "../types";
 import BookLogo from "./BookLogo";
@@ -6,94 +7,105 @@ import BookLogo from "./BookLogo";
 interface BookCardProps {
   book: BookInfo;
   selectionMode: boolean;
+  view: "grid" | "list";
 }
 
-export default function BookCard({ book, selectionMode }: BookCardProps) {
+export default function BookCard({ book, selectionMode, view }: BookCardProps) {
   const navigate = useNavigate();
-  const { removeBook, selectedIds, toggleSelect } = useLibraryStore();
+  const { removeBook, selectedIds, toggleSelect, progress } = useLibraryStore();
   const isSelected = selectedIds.has(book.id);
+  const entry = progress[book.id];
 
-  const handleClick = () => {
+  const open = () => {
     if (selectionMode) {
       toggleSelect(book.id);
-    } else {
-      navigate(`/reader/${book.id}`);
+      return;
     }
+    navigate("/reader/" + book.id);
   };
 
-  const handleRemove = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (confirm(`确定要从书架移除《${book.title}》吗？`)) {
+  const handleRemove = async (event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (confirm("确定要从书架移除《" + book.title + "》吗？\n原始文件不会被删除。")) {
       await removeBook(book.id);
     }
   };
 
+  const progressLabel = entry ? "读到第 " + (entry.chapter_index + 1) + " 章" : "";
+
+  if (view === "list") {
+    return (
+      <div
+        className={"book-row" + (isSelected ? " is-selected" : "")}
+        onClick={open}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") open();
+        }}
+      >
+        {selectionMode && (
+          <span className={"select-dot" + (isSelected ? " is-on" : "")} aria-hidden="true" />
+        )}
+        <div className="row-cover">
+          {book.cover ? (
+            <img src={book.cover} alt="" loading="lazy" />
+          ) : (
+            <BookLogo size={22} format={book.format} />
+          )}
+        </div>
+        <div className="row-main">
+          <span className="row-title">{book.title}</span>
+          <span className="row-meta">
+            {book.author || "未知作者"}
+            {progressLabel ? " · " + progressLabel : ""}
+          </span>
+        </div>
+        <span className="row-format">{book.format?.toUpperCase() ?? "EPUB"}</span>
+        {!selectionMode && (
+          <div className="row-actions">
+            <button className="btn-quiet" onClick={open}>阅读</button>
+            <button className="btn-quiet danger" onClick={handleRemove}>移除</button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
-      className={`book-card ${isSelected ? "selected" : ""}`}
-      onClick={handleClick}
-      style={{
-        cursor: selectionMode ? "pointer" : "default",
-        outline: isSelected ? "2px solid var(--accent)" : undefined,
-        outlineOffset: 2,
+      className={"book-card" + (isSelected ? " is-selected" : "")}
+      onClick={open}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") open();
       }}
     >
       {selectionMode && (
-        <div
-          style={{
-            position: "absolute",
-            top: 8,
-            left: 8,
-            width: 22,
-            height: 22,
-            borderRadius: 4,
-            background: isSelected ? "var(--accent)" : "rgba(255,255,255,0.8)",
-            border: `2px solid ${isSelected ? "var(--accent)" : "var(--border-color)"}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 2,
-            fontSize: 12,
-            color: isSelected ? "white" : "transparent",
-          }}
-        >
-          ✓
-        </div>
+        <span className={"select-dot select-dot-float" + (isSelected ? " is-on" : "")} aria-hidden="true" />
       )}
       <div className="cover">
         {book.cover ? (
-          <img src={book.cover} alt={book.title} loading="lazy" />
+          <img src={book.cover} alt="" loading="lazy" />
         ) : (
-          <div className="placeholder">
-            <BookLogo size={72} format={book.format} />
-          </div>
+          <BookLogo size={64} format={book.format} />
         )}
-        <span
-          style={{
-            position: "absolute",
-            top: 8,
-            right: 8,
-            padding: "2px 8px",
-            background: book.format === "txt" ? "rgba(59,130,246,0.85)" : "rgba(0,0,0,0.5)",
-            color: "white",
-            borderRadius: 4,
-            fontSize: 10,
-            fontWeight: 600,
-            letterSpacing: 0.5,
-          }}
-        >
-          {book.format?.toUpperCase() || "EPUB"}
-        </span>
+        <span className="format-badge">{book.format?.toUpperCase() ?? "EPUB"}</span>
       </div>
       <div className="info">
-        <div className="title">{book.title}</div>
-        <div className="author">{book.author || "未知作者"}</div>
+        <span className="title">{book.title}</span>
+        <span className="author">{book.author || "未知作者"}</span>
+        {progressLabel && <span className="progress-note">{progressLabel}</span>}
       </div>
       {!selectionMode && (
-        <div className="actions">
-          <button onClick={handleClick}>阅读</button>
-          <button onClick={handleRemove} className="delete">
-            移除
+        <div className="card-actions">
+          <button className="btn-quiet" onClick={open}>
+            <Icon name="book" size={14} />
+            阅读
+          </button>
+          <button className="btn-quiet danger" onClick={handleRemove}>
+            <Icon name="close" size={14} />
           </button>
         </div>
       )}

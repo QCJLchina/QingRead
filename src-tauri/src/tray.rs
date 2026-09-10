@@ -5,44 +5,55 @@ use tauri::{App, AppHandle, Manager};
 
 use crate::state::AppState;
 
-/// 启动时根据用户设置创建系统托盘
+/// 启动时建立托盘图标，并按当前偏好决定是否显示。
 pub fn setup_tray(app: &App) -> tauri::Result<()> {
-    let behavior = get_close_behavior(app);
-    if behavior == "minimize_to_tray" {
-        create_tray_icon(app)?;
-    }
+    create_tray_icon(app)?;
+    set_tray_visible(app.handle(), tray_should_be_visible(app.handle()));
     Ok(())
 }
 
-/// 在运行时动态更新托盘可见性，无需重启
-pub fn update_tray_for_behavior(app: &AppHandle, behavior: &str) {
-    let existing = app.tray_by_id("main-tray");
-    match behavior {
-        "minimize_to_tray" => {
-            if existing.is_none() {
-                // 尚未创建托盘 → 现在创建
-                if let Err(e) = create_tray_icon(app) {
-                    eprintln!("[tray] 创建托盘失败: {}", e);
-                }
-            }
-            // 已存在则无需操作
-        }
-        _ => {
-            if let Some(tray) = existing {
-                // 隐藏托盘图标（Tauri 2 不支持销毁，但隐藏后不可见即等效）
-                let _ = tray.set_visible(false);
-            }
-        }
+/// 关闭行为或低干扰模式变化后调用，实时更新托盘可见性，无需重启。
+pub fn refresh_tray(app: &AppHandle) {
+    if let Err(e) = ensure_tray_icon(app) {
+        eprintln!("[tray] 创建托盘失败: {}", e);
+    }
+    set_tray_visible(app, tray_should_be_visible(app));
+}
+
+/// 什么时候需要托盘图标：
+/// - 关闭行为是「最小化到托盘」；
+/// - 或者开启了低干扰模式 —— 窗口随时可能被隐藏，必须留一个能找回它的入口，
+///   这条不依赖「关闭到托盘」设置。
+fn tray_should_be_visible(app: &AppHandle) -> bool {
+    let state = app.state::<AppState>();
+    let Ok(store) = state.store.lock() else {
+        return true;
+    };
+    let close_to_tray = store.load_settings().close_behavior == "minimize_to_tray";
+    let low_distraction = store.load_window_settings().low_distraction;
+    close_to_tray || low_distraction
+}
+
+/// 隐藏窗口之前调用：托盘一定要在而且要可见，
+/// 否则窗口藏起来后用户没有任何办法把它找回来（隐藏的窗口也不在任务栏里）。
+pub fn ensure_recovery_entry(app: &AppHandle) {
+    if let Err(e) = ensure_tray_icon(app) {
+        eprintln!("[tray] 创建托盘失败: {}", e);
+    }
+    set_tray_visible(app, true);
+}
+
+fn set_tray_visible(app: &AppHandle, visible: bool) {
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let _ = tray.set_visible(visible);
     }
 }
 
-fn get_close_behavior(app: &impl Manager<tauri::Wry>) -> String {
-    app.state::<AppState>()
-        .store
-        .lock()
-        .ok()
-        .map(|s| s.load_settings().close_behavior)
-        .unwrap_or_else(|| "quit".to_string())
+fn ensure_tray_icon(app: &AppHandle) -> tauri::Result<()> {
+    if app.tray_by_id("main-tray").is_none() {
+        create_tray_icon(app)?;
+    }
+    Ok(())
 }
 
 fn create_tray_icon(app: &impl Manager<tauri::Wry>) -> tauri::Result<()> {
@@ -61,7 +72,7 @@ fn create_tray_icon(app: &impl Manager<tauri::Wry>) -> tauri::Result<()> {
     let _tray = TrayIconBuilder::with_id("main-tray")
         .icon(tray_icon)
         .icon_as_template(true)
-        .tooltip("EpubReader 电子书阅读器")
+        .tooltip("轻阅 / QingRead")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {

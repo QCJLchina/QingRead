@@ -1,8 +1,19 @@
-# Pack EpubReader project as zip
+# Pack the QingRead project as a zip archive.
+# All paths are derived from this script's own location plus the version declared in
+# src-tauri/tauri.conf.json, so the archive builds from any checkout without edits.
 $ErrorActionPreference = 'Stop'
 
-$source = 'E:\epubreader'
-$zipPath = 'E:\epubreader.zip'
+$repoRoot = $PSScriptRoot
+if (-not $repoRoot) { $repoRoot = (Get-Location).Path }
+$source = $repoRoot
+$zipPath = Join-Path (Split-Path $repoRoot -Parent) ((Split-Path $repoRoot -Leaf) + '.zip')
+
+$confPath = Join-Path $repoRoot 'src-tauri\tauri.conf.json'
+$conf = Get-Content -Raw -LiteralPath $confPath | ConvertFrom-Json
+$productName = $conf.productName
+$version = $conf.version
+$binaryName = 'qingread.exe'
+$setupName = ('{0}_{1}_x64-setup.exe' -f $productName, $version)
 
 # Remove any existing partial zip
 if (Test-Path $zipPath) {
@@ -35,8 +46,8 @@ $excludedFiles = @(
 
 # Pre-built binaries that should be placed at zip root (instead of in src-tauri/target/...)
 $rootBinaries = @(
-    @{ Source = 'src-tauri\target\release\epubreader.exe'; Dest = 'epubreader.exe' }
-    @{ Source = 'src-tauri\target\release\bundle\nsis\EpubReader_2.0.0_x64-setup.exe'; Dest = 'EpubReader_2.0.0_x64-setup.exe' }
+    @{ Source = ('src-tauri\target\release\' + $binaryName); Dest = $binaryName }
+    @{ Source = ('src-tauri\target\release\bundle\nsis\' + $setupName); Dest = $setupName }
 )
 
 function Test-Excluded {
@@ -68,6 +79,7 @@ function Get-ZipEntry {
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Add-Type -AssemblyName System.IO.Compression
 
+Write-Host ('Project: ' + $productName + ' ' + $version)
 Write-Host 'Scanning files...'
 $allFiles = @(Get-ChildItem $source -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer })
 $totalCount = $allFiles.Count

@@ -1,25 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
+import { appApi } from "../api";
 import { useSettingsStore } from "../store/settings";
 import { useSyncStore, type SyncProgressPayload } from "../store/sync";
-import type { SyncSummary, Theme, CloseBehavior } from "../types";
+import type { SyncSummary, CloseBehavior } from "../types";
 
-const themes: { value: Theme; label: string; preview: string }[] = [
-  { value: "light", label: "明亮", preview: "#ffffff" },
-  { value: "dark", label: "暗黑", preview: "#1a1a1a" },
-  { value: "sepia", label: "羊皮纸", preview: "#f4ecd8" },
-  { value: "green", label: "护眼绿", preview: "#c7edcc" },
-];
-
-const fonts = [
-  "system-ui, -apple-system, sans-serif",
-  "Georgia, 'Times New Roman', serif",
-  "'Courier New', Courier, monospace",
-  "'Palatino Linotype', 'Book Antiqua', Palatino, serif",
-  "Arial, Helvetica, sans-serif",
-  "Verdana, Geneva, sans-serif",
-];
 
 const kindLabels: Record<string, string> = {
   upload: "上传",
@@ -51,6 +37,8 @@ function formatTime(timestamp: number): string {
 }
 
 export default function SettingsPage() {
+  const [version, setVersion] = useState("");
+
   const { settings, updateSettings, setDataDir, restartApp } = useSettingsStore();
   const {
     serverUrl,
@@ -80,6 +68,10 @@ export default function SettingsPage() {
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
+
+  useEffect(() => {
+    appApi.version().then(setVersion).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     const unlistenProgress = listen<SyncProgressPayload>("sync-progress", (event) => {
@@ -172,127 +164,6 @@ export default function SettingsPage() {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
-        {/* Theme */}
-        <section>
-          <h2 style={{ fontSize: 18, marginBottom: 16 }}>主题</h2>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            {themes.map((t) => (
-              <button
-                key={t.value}
-                onClick={() => updateSettings({ theme: t.value })}
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: 16,
-                  borderRadius: 8,
-                  border: `2px solid ${settings.theme === t.value ? "var(--accent)" : "var(--border-color)"}`,
-                  background: "var(--card-bg)",
-                  cursor: "pointer",
-                  transition: "all 0.2s",
-                  minWidth: 100,
-                }}
-              >
-                <div
-                  style={{
-                    width: 48,
-                    height: 48,
-                    borderRadius: "50%",
-                    background: t.preview,
-                    border: "2px solid var(--border-color)",
-                  }}
-                />
-                <span style={{ fontSize: 14, fontWeight: 500 }}>{t.label}</span>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        {/* Font Size */}
-        <section>
-          <h2 style={{ fontSize: 18, marginBottom: 16 }}>
-            字号: {settings.font_size}px
-          </h2>
-          <input
-            type="range"
-            min={12}
-            max={32}
-            step={1}
-            value={settings.font_size}
-            onChange={(e) => updateSettings({ font_size: Number(e.target.value) })}
-            style={{ width: "100%", maxWidth: 400 }}
-          />
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              maxWidth: 400,
-              fontSize: 12,
-              color: "var(--text-muted)",
-              marginTop: 4,
-            }}
-          >
-            <span>12px</span>
-            <span>32px</span>
-          </div>
-        </section>
-
-        {/* Line Height */}
-        <section>
-          <h2 style={{ fontSize: 18, marginBottom: 16 }}>
-            行高: {settings.line_height.toFixed(1)}
-          </h2>
-          <input
-            type="range"
-            min={1.2}
-            max={3.0}
-            step={0.1}
-            value={settings.line_height}
-            onChange={(e) => updateSettings({ line_height: Number(e.target.value) })}
-            style={{ width: "100%", maxWidth: 400 }}
-          />
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              maxWidth: 400,
-              fontSize: 12,
-              color: "var(--text-muted)",
-              marginTop: 4,
-            }}
-          >
-            <span>1.2</span>
-            <span>3.0</span>
-          </div>
-        </section>
-
-        {/* Font Family */}
-        <section>
-          <h2 style={{ fontSize: 18, marginBottom: 16 }}>字体</h2>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: 400 }}>
-            {fonts.map((font) => (
-              <button
-                key={font}
-                onClick={() => updateSettings({ font_family: font })}
-                style={{
-                  padding: "10px 16px",
-                  borderRadius: 6,
-                  border: `2px solid ${settings.font_family === font ? "var(--accent)" : "var(--border-color)"}`,
-                  background: "var(--card-bg)",
-                  textAlign: "left",
-                  fontFamily: font,
-                  fontSize: 16,
-                  cursor: "pointer",
-                  transition: "all 0.2s",
-                }}
-              >
-                {font.split(",")[0].replace(/'/g, "")}
-              </button>
-            ))}
-          </div>
-        </section>
-
         {/* Custom Background */}
         <section>
           <h2 style={{ fontSize: 18, marginBottom: 16 }}>自定义背景</h2>
@@ -604,6 +475,19 @@ export default function SettingsPage() {
               )}
             </div>
           )}
+        </section>
+
+        {/* 关于 */}
+        <section>
+          <h2 style={{ fontSize: 18, marginBottom: 16 }}>关于</h2>
+          <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.9 }}>
+            <div>轻阅 / QingRead{version ? " · v" + version : ""}</div>
+            <div>阅读排版（字号、行距、字体、配色）在阅读页的「阅读设置」面板里调整。</div>
+            <div>窗口形态、置顶与低干扰选项在阅读页的「窗口尺寸」面板里调整。</div>
+            <div style={{ marginTop: 8, color: "var(--text-muted)" }}>
+              数据目录沿用旧版位置，升级后书架、进度与同步凭据不受影响。
+            </div>
+          </div>
         </section>
       </div>
     </div>

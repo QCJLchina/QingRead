@@ -13,6 +13,9 @@ pub struct AppPaths {
     pub sync_config_file: PathBuf,
     pub sync_state_file: PathBuf,
     pub tombstones_dir: PathBuf,
+    /// 本机窗口与低干扰偏好。刻意独立于 settings.json，
+    /// 也不参与 WebDAV 同步（同步只覆盖 books/、covers/、progress/、tombstones/）。
+    pub window_file: PathBuf,
 }
 
 impl AppPaths {
@@ -20,6 +23,10 @@ impl AppPaths {
         // 一律使用用户在 settings.json 里指定的 data_dir，或者回退到
         // %APPDATA%/EpubReader。不再尝试把数据写到 exe 旁 data/，
         // 避免 NSIS 安装到 Program Files 时无写权限导致“看似装好但导入失败”。
+        //
+        // 兼容说明：产品已改名「轻阅 / QingRead」，但这里的目录名必须继续是
+        // EpubReader。它是旧版写入书架、进度、同步凭据的位置，改名会让升级后的
+        // 用户看到空书架。同理见 sync/config.rs 里的 SYNC_SERVICE。
         let base = match data_dir {
             Some(p) if !p.as_os_str().is_empty() => p,
             _ => dirs::data_dir()
@@ -36,6 +43,7 @@ impl AppPaths {
         let sync_config_file = base.join("sync_config.json");
         let sync_state_file = base.join("sync_state.json");
         let tombstones_dir = base.join("tombstones");
+        let window_file = base.join("window.json");
 
         Self {
             data_dir: base,
@@ -48,6 +56,7 @@ impl AppPaths {
             sync_config_file,
             sync_state_file,
             tombstones_dir,
+            window_file,
         }
     }
 

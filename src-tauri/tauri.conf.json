@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicklasoverworlds/tauri/v2/tooling/cli/schema.json",
-  "productName": "EpubReader",
-  "version": "2.0.0",
+  "productName": "QingRead",
+  "version": "3.0.0",
   "identifier": "com.epubreader.app",
   "build": {
     "frontendDist": "../dist",
@@ -12,12 +12,16 @@
   "app": {
     "windows": [
       {
-        "title": "EpubReader 电子书阅读器",
-        "width": 1200,
-        "height": 800,
-        "minWidth": 800,
-        "minHeight": 600,
-        "center": true
+        "label": "main",
+        "title": "轻阅",
+        "width": 940,
+        "height": 610,
+        "minWidth": 320,
+        "minHeight": 200,
+        "center": true,
+        "resizable": true,
+        "decorations": true,
+        "visible": false
       }
     ],
     "security": {
@@ -47,7 +51,7 @@
         "installMode": "both",
         "languages": ["English", "SimpChinese"],
         "displayLanguageSelector": false,
-        "startMenuFolder": "EpubReader"
+        "startMenuFolder": "QingRead"
       }
     }
   },

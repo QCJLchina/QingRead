@@ -1,6 +1,30 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
-import type { ChapterData, ReadingProgress, TocEntry } from "../types";
+import { progressApi, readerApi } from "../api";
+import type { ChapterData, ReaderMode, ReadingProgress, TextAnchor, TocEntry } from "../types";
+
+/** 打开 / 切换章节时希望恢复到什么位置。排版引擎消费一次后清空。 */
+export interface PendingPosition {
+  anchor: TextAnchor | null;
+  /** 旧数据或按页恢复时使用 */
+  page: number | null;
+  ratio: number | null;
+  /** 从下一章往回翻时，停在该章末尾 */
+  atEnd?: boolean;
+}
+
+export interface OpenChapterOptions {
+  anchor?: TextAnchor | null;
+  page?: number | null;
+  ratio?: number | null;
+  atEnd?: boolean;
+}
+
+export interface SaveProgressInput {
+  chapterIndex: number;
+  pageInChapter: number;
+  anchor: TextAnchor | null;
+  mode: ReaderMode;
+}
 
 interface ReaderState {
   bookId: string | null;
@@ -8,18 +32,46 @@ interface ReaderState {
   currentChapter: ChapterData | null;
   toc: TocEntry[];
   progress: ReadingProgress | null;
-  chapterOffsets: number[]; // offsets[i] = 第一章之前的累计页数（offsets[0] = 0, offsets[1] = 第1章页数, ...）
+  /** offsets[i] = 第 i 章之前的累计页数，用于 total_pages_read */
+  chapterOffsets: number[];
   loading: boolean;
   error: string | null;
+  /** 正在加载的目标章节，用来在保留旧内容时提示「正在加载」 */
+  loadingChapter: number | null;
+  pendingPosition: PendingPosition | null;
 
   openBook: (bookId: string) => Promise<void>;
-  loadChapter: (chapterIndex: number) => Promise<void>;
-  preloadChapter: (chapterIndex: number) => Promise<void>;
-  loadToc: () => Promise<void>;
-  loadProgress: () => Promise<void>;
-  loadChapterOffsets: () => Promise<void>;
-  saveProgress: (chapterIndex: number, pageInChapter: number, totalPagesRead: number) => Promise<void>;
+  loadChapter: (chapterIndex: number, options?: OpenChapterOptions) => Promise<void>;
+  preloadChapter: (chapterIndex: number) => void;
+  consumePendingPosition: () => PendingPosition | null;
+  saveProgress: (input: SaveProgressInput) => void;
+  retry: () => Promise<void>;
   clearReader: () => void;
+}
+
+/**
+ * 请求序号：快速切书或连点章节时，旧请求的返回必须被丢弃，
+ * 否则会出现「点第 3 章，屏幕上是第 2 章」这种串内容。
+ */
+let bookToken = 0;
+let chapterToken = 0;
+
+/**
+ * 每本书一条串行写入队列。
+ * 保存进度是「最后一次为准」，但并发 IPC 的完成顺序不保证，
+ * 排队可以避免较早的请求把较新的位置覆盖掉。
+ */
+const saveQueues = new Map<string, Promise<void>>();
+
+function enqueueSave(bookId: string, task: () => Promise<void>): void {
+  const previous = saveQueues.get(bookId) ?? Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(task)
+    .catch((error) => {
+      console.error("保存阅读进度失败:", error);
+    });
+  saveQueues.set(bookId, next);
 }
 
 export const useReaderStore = create<ReaderState>((set, get) => ({
@@ -31,123 +83,141 @@ export const useReaderStore = create<ReaderState>((set, get) => ({
   chapterOffsets: [0],
   loading: false,
   error: null,
+  loadingChapter: null,
+  pendingPosition: null,
 
-  openBook: async (bookId: string) => {
-    set({ loading: true, error: null, bookId, chapterOffsets: [0] });
+  openBook: async (bookId) => {
+    const token = ++bookToken;
+    chapterToken += 1;
+    set({
+      loading: true,
+      error: null,
+      bookId,
+      chapterCount: 0,
+      toc: [],
+      progress: null,
+      chapterOffsets: [0],
+      pendingPosition: null,
+      loadingChapter: null,
+    });
+
     try {
-      // 并行执行 4 个互不依赖的 IPC 调用，节省 3 轮网络往返时间
       const [chapterCount, progress, toc, offsets] = await Promise.all([
-        invoke<number>("open_reader", { bookId }),
-        invoke<ReadingProgress | null>("load_progress", { bookId }).catch(() => null),
-        invoke<TocEntry[]>("get_toc", { bookId }).catch(() => [] as TocEntry[]),
-        invoke<number[]>("get_chapter_offsets", { bookId }).catch(() => null),
+        readerApi.open(bookId),
+        progressApi.load(bookId).catch(() => null),
+        readerApi.toc(bookId).catch(() => [] as TocEntry[]),
+        readerApi.chapterOffsets(bookId).catch(() => null),
       ]);
+      if (token !== bookToken) return;
 
       set({
         chapterCount,
         progress,
         toc,
-        chapterOffsets: offsets ?? Array.from({ length: chapterCount + 1 }, (_, i) => i),
+        chapterOffsets:
+          offsets ?? Array.from({ length: chapterCount + 1 }, (_, index) => index),
       });
 
-      // Load first chapter or resume from progress
       const startChapter = progress?.chapter_index ?? 0;
-      await get().loadChapter(startChapter);
-
+      await get().loadChapter(startChapter, {
+        anchor: progress?.anchor ?? null,
+        page: progress?.page_in_chapter ?? null,
+      });
+      if (token !== bookToken) return;
       set({ loading: false });
-    } catch (e) {
-      set({ error: String(e), loading: false });
+    } catch (error) {
+      if (token !== bookToken) return;
+      set({ error: String(error), loading: false });
     }
   },
 
-  loadChapter: async (chapterIndex: number) => {
+  loadChapter: async (chapterIndex, options) => {
     const { bookId } = get();
     if (!bookId) return;
 
-    set({ loading: true, error: null });
-    try {
-      const chapter = await invoke<ChapterData>("load_chapter", {
-        bookId,
-        chapterIndex,
-      });
-      set({ currentChapter: chapter, loading: false });
-    } catch (e) {
-      set({ error: String(e), loading: false });
-    }
-  },
+    const token = ++chapterToken;
+    // 注意：不清空 currentChapter。缓慢章节解析期间保留上一屏内容，
+    // 用户看到的是「还在加载」，而不是白屏。
+    set({
+      loading: true,
+      loadingChapter: chapterIndex,
+      error: null,
+      pendingPosition: {
+        anchor: options?.anchor ?? null,
+        page: options?.page ?? null,
+        ratio: options?.ratio ?? null,
+        atEnd: options?.atEnd ?? false,
+      },
+    });
 
-  /// 后台预加载章节（不阻塞 UI）
-  preloadChapter: async (chapterIndex: number) => {
-    const { bookId } = get();
-    if (!bookId) return;
     try {
-      await invoke<ChapterData>("load_chapter", {
-        bookId,
-        chapterIndex,
-      });
-    } catch {
-      // 预加载失败忽略
-    }
-  },
-
-  loadToc: async () => {
-    const { bookId } = get();
-    if (!bookId) return;
-    try {
-      const toc = await invoke<TocEntry[]>("get_toc", { bookId });
-      set({ toc });
-    } catch (e) {
-      set({ error: String(e) });
-    }
-  },
-
-  loadProgress: async () => {
-    const { bookId } = get();
-    if (!bookId) return;
-    try {
-      const progress = await invoke<ReadingProgress | null>("load_progress", { bookId });
-      set({ progress });
-    } catch (e) {
-      set({ error: String(e) });
-    }
-  },
-
-  loadChapterOffsets: async () => {
-    const { bookId } = get();
-    if (!bookId) return;
-    try {
-      const offsets = await invoke<number[]>("get_chapter_offsets", { bookId });
-      set({ chapterOffsets: offsets });
-    } catch (e) {
-      set({ error: String(e) });
-    }
-  },
-
-  saveProgress: async (chapterIndex: number, pageInChapter: number, totalPagesRead: number) => {
-    const { bookId } = get();
-    if (!bookId) return;
-    try {
-      await invoke("save_progress", {
-        bookId,
-        chapterIndex,
-        pageInChapter,
-        totalPagesRead,
-      });
+      const chapter = await readerApi.chapter(bookId, chapterIndex);
+      if (token !== chapterToken) return;
       set({
-        progress: {
-          book_id: bookId,
-          chapter_index: chapterIndex,
-          page_in_chapter: pageInChapter,
-          total_pages_read: totalPagesRead,
-          last_read: Date.now(),
-        },
+        currentChapter: chapter,
+        loading: false,
+        loadingChapter: null,
+        error: null,
       });
-    } catch (e) {
-      set({ error: String(e) });
+    } catch (error) {
+      if (token !== chapterToken) return;
+      // 保留 loadingChapter：重试时要知道失败的是哪一章
+      set({
+        loading: false,
+        error: String(error),
+        pendingPosition: null,
+      });
     }
+  },
+
+  preloadChapter: (chapterIndex) => {
+    const { bookId, chapterCount } = get();
+    if (!bookId || chapterIndex < 0 || chapterIndex >= chapterCount) return;
+    readerApi.chapter(bookId, chapterIndex).catch(() => undefined);
+  },
+
+  consumePendingPosition: () => {
+    const pending = get().pendingPosition;
+    if (pending) set({ pendingPosition: null });
+    return pending;
+  },
+
+  saveProgress: (input) => {
+    const { bookId, chapterOffsets } = get();
+    if (!bookId) return;
+    const base = chapterOffsets[input.chapterIndex] ?? input.chapterIndex;
+    const payload = {
+      bookId,
+      chapterIndex: input.chapterIndex,
+      pageInChapter: Math.max(0, Math.floor(input.pageInChapter)),
+      totalPagesRead: Math.max(0, base + Math.floor(input.pageInChapter) + 1),
+      anchor: input.anchor,
+      mode: input.mode,
+    };
+
+    set({
+      progress: {
+        book_id: bookId,
+        chapter_index: payload.chapterIndex,
+        page_in_chapter: payload.pageInChapter,
+        total_pages_read: payload.totalPagesRead,
+        last_read: Math.floor(Date.now() / 1000),
+        anchor: payload.anchor,
+        mode: payload.mode,
+      },
+    });
+
+    enqueueSave(bookId, () => progressApi.save(payload));
+  },
+
+  retry: async () => {
+    const { currentChapter } = get();
+    await get().loadChapter(currentChapter?.index ?? 0);
   },
 
   clearReader: () => {
+    bookToken += 1;
+    chapterToken += 1;
     set({
       bookId: null,
       chapterCount: 0,
@@ -157,6 +227,8 @@ export const useReaderStore = create<ReaderState>((set, get) => ({
       chapterOffsets: [0],
       loading: false,
       error: null,
+      loadingChapter: null,
+      pendingPosition: null,
     });
   },
 }));

@@ -1,31 +1,24 @@
 import { useEffect } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { useSettingsStore } from "./store/settings";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import ErrorBoundary from "./components/ErrorBoundary";
 import TopBar from "./components/TopBar";
 import LibraryPage from "./pages/LibraryPage";
 import ReaderPage from "./pages/ReaderPage";
 import SettingsPage from "./pages/SettingsPage";
+import { useSettingsStore } from "./store/settings";
 
 export default function App() {
   const { loadSettings, loaded } = useSettingsStore();
 
   useEffect(() => {
-    loadSettings();
+    void loadSettings();
   }, [loadSettings]);
 
   if (!loaded) {
     return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          height: "100vh",
-          color: "var(--text-secondary)",
-        }}
-      >
-        加载中...
+      <div className="app-boot">
+        <div className="spinner" />
+        <span>轻阅正在启动…</span>
       </div>
     );
   }
@@ -40,13 +33,13 @@ export default function App() {
             element={
               <div className="app-layout">
                 <TopBar />
-                <div className="main-content">
+                <main className="main-content">
                   <Routes>
                     <Route path="/" element={<LibraryPage />} />
                     <Route path="/settings" element={<SettingsPage />} />
                     <Route path="*" element={<Navigate to="/" replace />} />
                   </Routes>
-                </div>
+                </main>
               </div>
             }
           />

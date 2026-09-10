@@ -28,7 +28,15 @@ pub struct ReadingProgress {
     pub chapter_index: usize,
     pub page_in_chapter: usize,
     pub total_pages_read: usize,
+    /// 上次阅读时间，Unix 秒（与库内其他时间戳一致）。
     pub last_read: u64,
+    /// 稳定的正文锚点：清洗后正文里的文本节点路径 + 字符偏移，附带用于重定位的
+    /// 文本片段和章节内比例。旧的进度文件没有这个字段，读取时按页码尽力恢复。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<serde_json::Value>,
+    /// 上次使用的阅读模式：`paged` 或 `scroll`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +50,64 @@ pub struct AppSettings {
     pub data_dir: Option<String>,
     /// 关闭主窗口时的行为：`minimize_to_tray`（最小化到托盘）或 `quit`（直接退出）
     pub close_behavior: String,
+    /// 阅读模式：`paged`（分页）或 `scroll`（滚动）。
+    /// `None` 表示用户从未选择过：升级上来的老安装保持滚动习惯，
+    /// 全新安装由 `Store::new` 写入 `paged`。
+    #[serde(default)]
+    pub reading_mode: Option<String>,
+    /// 正文栏宽度（逻辑像素）。`None` 或 0 表示跟随窗口宽度。
+    #[serde(default)]
+    pub content_width: Option<f32>,
+    /// 正文内边距（逻辑像素）。
+    #[serde(default)]
+    pub content_padding: Option<f32>,
+}
+
+/// 本机窗口与低干扰偏好。
+///
+/// 刻意存放在独立的 window.json，而不是 settings.json：
+/// 窗口位置/尺寸属于「这台电脑」的状态，换机器后套用旧坐标会跑到屏幕外；
+/// 而且它不参与 WebDAV 同步（同步只覆盖 books/、covers/、progress/、tombstones/）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowSettings {
+    /// 上次使用的布局预设：standard / slim / strip / mini / custom
+    pub layout: String,
+    /// 窗口客户区宽高，逻辑像素
+    pub width: f64,
+    pub height: f64,
+    /// 窗口左上角坐标，逻辑像素。仅在能映射到显示器时恢复。
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    /// 是否锁定当前长宽比例
+    pub lock_ratio: bool,
+    pub always_on_top: bool,
+    /// 低干扰模式：中性窗口标题、隐藏装饰背景、收起次要操作
+    pub low_distraction: bool,
+    /// 全局隐藏/恢复快捷键，形如 `Ctrl+Alt+H`
+    pub hide_hotkey: String,
+    /// 鼠标移出后自动收起工具栏
+    pub toolbar_auto_hide: bool,
+    /// 窗口失去焦点时显示中性遮挡页
+    pub blur_curtain: bool,
+}
+
+impl Default for WindowSettings {
+    fn default() -> Self {
+        Self {
+            layout: "standard".to_string(),
+            width: 940.0,
+            height: 610.0,
+            x: None,
+            y: None,
+            lock_ratio: false,
+            always_on_top: false,
+            low_distraction: false,
+            hide_hotkey: "Ctrl+Alt+H".to_string(),
+            toolbar_auto_hide: false,
+            blur_curtain: false,
+        }
+    }
 }
 
 /// 把空串视为 None，避免 settings.json 里残留 Some("")
@@ -63,6 +129,22 @@ impl Default for AppSettings {
             custom_bg_image: None,
             data_dir: None,
             close_behavior: "quit".to_string(),
+            reading_mode: None,
+            content_width: None,
+            content_padding: None,
+        }
+    }
+}
+
+impl AppSettings {
+    /// 全新安装的默认值：默认分页阅读。
+    ///
+    /// 只有数据目录里还不存在 settings.json 时才会用它 —— 老用户升级后文件已存在，
+    /// 反序列化得到 `reading_mode: None`，前端据此继续使用滚动阅读，保持原有习惯。
+    pub fn fresh_install_default() -> Self {
+        Self {
+            reading_mode: Some("paged".to_string()),
+            ..Self::default()
         }
     }
 }
@@ -93,6 +175,13 @@ impl Store {
     }
 
     pub fn load_settings(&self) -> AppSettings {
+        // 文件不存在 = 全新安装：返回「默认分页」的初始值，但不落盘。
+        // 刻意不在这里创建 settings.json —— 同步逻辑把「本地多出一个 settings.json」
+        // 当成一次本地修改，凭空造出与远端的伪冲突；老安装文件已存在，
+        // 反序列化得到 reading_mode: None，前端据此继续保持滚动阅读习惯。
+        if !self.paths.settings_file.exists() {
+            return AppSettings::fresh_install_default();
+        }
         load_json_with_backup(&self.paths.settings_file, "设置").unwrap_or_default()
     }
 
@@ -101,6 +190,18 @@ impl Store {
             std::fs::create_dir_all(parent)?;
         }
         atomic_write_json(&self.paths.settings_file, settings)?;
+        Ok(())
+    }
+
+    pub fn load_window_settings(&self) -> WindowSettings {
+        load_json_with_backup(&self.paths.window_file, "窗口设置").unwrap_or_default()
+    }
+
+    pub fn save_window_settings(&self, settings: &WindowSettings) -> anyhow::Result<()> {
+        if let Some(parent) = self.paths.window_file.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        atomic_write_json(&self.paths.window_file, settings)?;
         Ok(())
     }
 
@@ -120,6 +221,23 @@ impl Store {
         }
         atomic_write_json(&self.paths.progress_path(&progress.book_id), progress)?;
         Ok(())
+    }
+
+
+    /// 扫描进度目录，返回所有书的阅读进度。
+    /// 用于书架上的「继续阅读」和进度显示。单本解析失败不影响其他书。
+    pub fn load_all_progress(&self) -> Vec<ReadingProgress> {
+        let Ok(entries) = std::fs::read_dir(&self.paths.progress_dir) else {
+            return Vec::new();
+        };
+        let mut items: Vec<ReadingProgress> = entries
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().extension().map(|e| e == "json").unwrap_or(false))
+            .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+            .filter_map(|text| serde_json::from_str::<ReadingProgress>(&text).ok())
+            .collect();
+        items.sort_by(|a, b| b.last_read.cmp(&a.last_read));
+        items
     }
 
     pub fn add_book_with_format(
@@ -304,7 +422,7 @@ mod tests {
     use super::*;
 
     fn test_store() -> (Store, PathBuf) {
-        let temp = std::env::temp_dir().join(format!("epubreader-store-test-{}", uuid::Uuid::new_v4()));
+        let temp = std::env::temp_dir().join(format!("qingread-store-test-{}", uuid::Uuid::new_v4()));
         (Store::new(Some(temp.clone())), temp)
     }
 
@@ -324,6 +442,8 @@ mod tests {
             page_in_chapter: 0,
             total_pages_read: 0,
             last_read: 0,
+            anchor: None,
+            mode: None,
         };
 
         assert!(store.save_progress(&progress).is_err());
