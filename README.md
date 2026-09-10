@@ -284,4 +284,4 @@ git push origin v3.0.0
 
 ## 许可
 
-仅供个人使用。
+本项目采用 [MIT License](LICENSE) 授权，可自由使用、修改、分发，需保留版权声明。
