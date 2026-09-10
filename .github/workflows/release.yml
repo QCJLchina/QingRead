@@ -144,8 +144,19 @@ jobs:
             gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/releases/$($release.id)"
             if ($LASTEXITCODE -ne 0) { throw "Failed to delete draft release $($release.id)" }
           }
-          # 初稿用 annotated tag 的说明（release notes 写在 tag message 里）；不用 --generate-notes
-          $body = git tag -l --format='%(contents)' $tag
-          if ([string]::IsNullOrWhiteSpace(($body -join "`n"))) { $body = $tag }
-          gh release create $tag --draft --verify-tag --title $tag --notes ($body -join "`n") @assets
+          # 初稿用 annotated tag 的说明（release notes 写在 tag message 里）；不用 --generate-notes。
+          # 注意：actions/checkout 检出一个 tag 时，本地 ref 可能只指向 commit，这种轻量 ref 的
+          # %(contents) 取到的是提交信息而非 tag 说明。这里强制重新拉取 tag 对象再读它自己的 message。
+          $tagRef = 'refs/tags/' + $tag
+          git fetch --force --no-tags origin ($tagRef + ':' + $tagRef) 2>$null | Out-Null
+          if ((git cat-file -t $tagRef) -ne 'tag') {
+            throw "$tag is not an annotated tag. Re-create it with: git tag -a $tag -m <release notes>"
+          }
+          $raw = @(git cat-file -p $tagRef)
+          $blank = -1
+          for ($i = 0; $i -lt $raw.Count; $i++) { if ($raw[$i] -eq "") { $blank = $i; break } }
+          if ($blank -lt 0) { throw "cannot locate the tag message of $tag" }
+          $body = ($raw[($blank + 1)..($raw.Count - 1)] -join "`n").Trim()
+          if ([string]::IsNullOrWhiteSpace($body)) { $body = $tag }
+          gh release create $tag --draft --verify-tag --title $tag --notes $body @assets
           if ($LASTEXITCODE -ne 0) { throw 'Failed to create draft release with assets' }
