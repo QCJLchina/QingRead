@@ -2,6 +2,14 @@
 
 基于 Tauri 2 + React 18 + Rust 的轻量级电子书阅读器，支持 EPUB 和 TXT 格式。产品名为 **轻阅 / QingRead**。
 
+## v3.0.1 主要更新
+
+修一个会影响「外放」观感的问题：仓库与发布页此前未声明许可证。
+
+- **采用 MIT 许可证**：新增 LICENSE，package.json 与 Cargo.toml 声明 `license`，README 许可章节改为指向 LICENSE。此前未声明许可证时，他人没有使用、修改与分发的授权。
+
+此外本版重新打包发布，使安装包与绿色版内含的文档和许可证信息与仓库一致。
+
 ## v3.0.0 主要更新
 
 - **统一改名**：产品确定为「轻阅 / QingRead」，界面、窗口标题、托盘提示、安装器、可执行文件与包名全部一致；应用标识、默认数据目录、WebDAV 远端目录和系统凭据服务名刻意保留旧值，升级后书架、进度、自定义目录和同步密码都不受影响。
@@ -46,7 +54,7 @@
 
 ### 方式一：NSIS 安装器（推荐）
 
-1. 双击 `QingRead_3.0.0_x64-setup.exe`
+1. 双击 `QingRead_3.0.1_x64-setup.exe`
 2. 按向导安装
 3. 从开始菜单或桌面快捷方式启动
 
@@ -54,7 +62,7 @@
 
 ### 方式二：绿色版（免安装）
 
-1. 解压 `QingRead_3.0.0_x64-portable.zip` 到任意目录
+1. 解压 `QingRead_3.0.1_x64-portable.zip` 到任意目录
 2. 双击其中的 `qingread.exe` 运行，首次启动会在 `%APPDATA%\EpubReader\` 创建数据目录
 3. 想换地方就整个目录挪走，不写注册表，卸载时直接删目录
 
@@ -242,7 +250,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 
 # 产物位置
 src-tauri\target\release\qingread.exe                                # 绿色版可执行文件
-src-tauri\target\release\bundle\nsis\QingRead_3.0.0_x64-setup.exe  # NSIS 安装器
+src-tauri\target\release\bundle\nsis\QingRead_3.0.1_x64-setup.exe  # NSIS 安装器
 ```
 
 `build.ps1` 优先使用项目内 `.tools\cargo-home` 的 Rust 工具链（若存在），否则回退到 PATH 上的 cargo；两者都没有时会明确报错。
@@ -273,11 +281,11 @@ registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
 流水线会校验），再去 Actions 页手动 Run workflow 干跑一次确认构建通过，最后打标签：
 
 ```powershell
-git tag -a v3.0.0 -m "轻阅 v3.0.0"
-git push origin v3.0.0
+git tag -a v3.0.1 -m "轻阅 v3.0.1"
+git push origin v3.0.1
 ```
 
-标签必须与版本号一致（`v3.0.0` 对应 `3.0.0`），对不上流水线会直接失败。
+标签必须与版本号一致（`v3.0.1` 对应 `3.0.1`），对不上流水线会直接失败。
 流水线只创建 draft release，release notes 需要你在网页上补充后再手动 Publish。
 
 ---
