@@ -1,7 +1,7 @@
 use crate::epub::parser::EpubParser;
 use crate::epub::txt_parser::TxtParser;
 use crate::storage::paths::AppPaths;
-use crate::storage::store::{AppSettings, Store};
+use crate::storage::store::{AppSettings, LibraryEntry, Store};
 use crate::sync::webdav::WebDavClient;
 use anyhow::{anyhow, bail, Context};
 use serde::{Deserialize, Serialize};
@@ -77,6 +77,16 @@ pub struct SyncAction {
 pub struct SyncPreview {
     pub actions: Vec<SyncAction>,
     pub has_remote: bool,
+    /// 预览时本地快照和远端 manifest 的指纹，执行前必须保持一致。
+    pub local_fingerprint: String,
+    pub remote_fingerprint: String,
+}
+
+struct RemoteManifest {
+    manifest: Manifest,
+    fingerprint: String,
+    etag: Option<String>,
+    exists: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +106,8 @@ pub struct SyncEngine {
     client: Box<dyn WebDavClient>,
     state: SyncState,
     current_remote: Manifest,
+    current_remote_etag: Option<String>,
+    current_remote_exists: bool,
 }
 
 impl SyncEngine {
@@ -111,34 +123,87 @@ impl SyncEngine {
             client,
             state,
             current_remote: Manifest::default(),
+            current_remote_etag: None,
+            current_remote_exists: false,
         })
     }
 
     pub async fn preview(&mut self) -> anyhow::Result<SyncPreview> {
+        self.client.ensure_sync_dirs().await?;
         self.prepare_local_files()?;
         let local = self.build_local_snapshot()?;
         let remote = self.fetch_remote_manifest().await?;
-        self.current_remote = remote.clone();
-        let actions = self.plan_actions(&local, &remote);
+        self.current_remote = remote.manifest.clone();
+        self.current_remote_etag = remote.etag.clone();
+        self.current_remote_exists = remote.exists;
+        let actions = self.plan_actions(&local, &remote.manifest);
         Ok(SyncPreview {
             actions,
-            has_remote: !remote.items.is_empty(),
+            has_remote: !remote.manifest.items.is_empty(),
+            local_fingerprint: snapshot_fingerprint(&local),
+            remote_fingerprint: remote.fingerprint,
         })
     }
 
     pub async fn apply<F>(
         &mut self,
         decisions: &[SyncDecision],
+        on_progress: F,
+    ) -> anyhow::Result<SyncSummary>
+    where
+        F: FnMut(usize, usize, &str),
+    {
+        self.apply_internal(decisions, None, None, on_progress).await
+    }
+
+    /// 使用 preview 返回的快照执行，数据在预览后变化时拒绝写入。
+    pub async fn apply_with_fingerprints<F>(
+        &mut self,
+        decisions: &[SyncDecision],
+        expected_local_fingerprint: &str,
+        expected_remote_fingerprint: &str,
+        on_progress: F,
+    ) -> anyhow::Result<SyncSummary>
+    where
+        F: FnMut(usize, usize, &str),
+    {
+        self.apply_internal(
+            decisions,
+            Some(expected_local_fingerprint),
+            Some(expected_remote_fingerprint),
+            on_progress,
+        )
+        .await
+    }
+
+    async fn apply_internal<F>(
+        &mut self,
+        decisions: &[SyncDecision],
+        expected_local_fingerprint: Option<&str>,
+        expected_remote_fingerprint: Option<&str>,
         mut on_progress: F,
     ) -> anyhow::Result<SyncSummary>
     where
         F: FnMut(usize, usize, &str),
     {
+        self.client.ensure_sync_dirs().await?;
         self.prepare_local_files()?;
         let local = self.build_local_snapshot()?;
         let remote = self.fetch_remote_manifest().await?;
-        self.current_remote = remote.clone();
-        let actions = self.plan_actions(&local, &remote);
+        if let Some(expected) = expected_local_fingerprint {
+            if snapshot_fingerprint(&local) != expected {
+                bail!("本地数据在预览后发生变化，请重新预览同步");
+            }
+        }
+        if let Some(expected) = expected_remote_fingerprint {
+            if remote.fingerprint != expected {
+                bail!("远端 manifest 在预览后发生变化，请重新预览同步");
+            }
+        }
+        self.current_remote = remote.manifest.clone();
+        self.current_remote_etag = remote.etag.clone();
+        self.current_remote_exists = remote.exists;
+        let actions = self.plan_actions(&local, &remote.manifest);
         if actions.is_empty() {
             return Ok(SyncSummary {
                 applied: 0,
@@ -245,7 +310,7 @@ impl SyncEngine {
         if self.store.paths.library_file.exists() {
             items.insert(
                 "library.json".to_string(),
-                self.file_meta_for_path("library.json", &self.store.paths.library_file)?,
+                self.file_meta_for_syncable_library()?,
             );
         }
         if self.store.paths.settings_file.exists() {
@@ -341,6 +406,19 @@ impl SyncEngine {
         })
     }
 
+    fn file_meta_for_syncable_library(&self) -> anyhow::Result<FileMeta> {
+        let bytes = syncable_library_bytes(&self.store.paths.library_file)?;
+        let mtime = std::fs::metadata(&self.store.paths.library_file)
+            .map(|m| modified_ms(&m))
+            .unwrap_or(0);
+        Ok(FileMeta {
+            sha256: hash_bytes(&bytes),
+            size: bytes.len() as u64,
+            updated_at: if mtime == 0 { now_secs() } else { mtime },
+            device_id: self.state.device_id.clone(),
+        })
+    }
+
     fn file_meta_for_syncable_settings(&self) -> anyhow::Result<FileMeta> {
         let bytes = syncable_settings_bytes(&self.store.load_settings())?;
         let sha256 = hash_bytes(&bytes);
@@ -361,10 +439,23 @@ impl SyncEngine {
         })
     }
 
-    async fn fetch_remote_manifest(&self) -> anyhow::Result<Manifest> {
-        match self.client.get(MANIFEST_FILE).await? {
-            Some(bytes) => serde_json::from_slice(&bytes).context("invalid remote manifest"),
-            None => Ok(Manifest::default()),
+    async fn fetch_remote_manifest(&self) -> anyhow::Result<RemoteManifest> {
+        match self.client.get_with_etag(MANIFEST_FILE).await? {
+            Some((bytes, etag)) => {
+                let manifest = serde_json::from_slice(&bytes).context("invalid remote manifest")?;
+                Ok(RemoteManifest {
+                    manifest,
+                    fingerprint: hash_bytes(&bytes),
+                    etag,
+                    exists: true,
+                })
+            }
+            None => Ok(RemoteManifest {
+                manifest: Manifest::default(),
+                fingerprint: hash_bytes(b""),
+                etag: None,
+                exists: false,
+            }),
         }
     }
 
@@ -791,6 +882,18 @@ impl SyncEngine {
         )
     }
 
+    fn verify_remote_bytes(&self, key: &str, bytes: &[u8]) -> anyhow::Result<()> {
+        let expected = self
+            .current_remote
+            .items
+            .get(key)
+            .ok_or_else(|| anyhow!("Remote metadata disappeared: {}", key))?;
+        if expected.size != bytes.len() as u64 || expected.sha256 != hash_bytes(bytes) {
+            bail!("Remote item failed integrity check: {}", key);
+        }
+        Ok(())
+    }
+
     async fn apply_upload(&mut self, action: &SyncAction) -> anyhow::Result<()> {
         let bytes = self.bytes_for_key(&action.id)?;
         self.client.put(&action.id, bytes.clone()).await?;
@@ -806,6 +909,7 @@ impl SyncEngine {
             .get(&action.id)
             .await?
             .ok_or_else(|| anyhow!("Remote item disappeared: {}", action.id))?;
+        self.verify_remote_bytes(&action.id, &bytes)?;
         self.write_local_file(&action.id, &bytes)?;
         let meta = self.meta_for_key(&action.id, &bytes)?;
         self.state.last_local.insert(action.id.clone(), meta);
@@ -851,6 +955,7 @@ impl SyncEngine {
                 .get(&action.id)
                 .await?
                 .ok_or_else(|| anyhow!("Remote item disappeared: {}", action.id))?;
+            self.verify_remote_bytes(&action.id, &bytes)?;
             self.write_local_file(&action.id, &bytes)?;
             let meta = self.meta_for_key(&action.id, &bytes)?;
             self.state.last_local.insert(action.id.clone(), meta);
@@ -923,6 +1028,7 @@ impl SyncEngine {
                     .get(key)
                     .await?
                     .ok_or_else(|| anyhow!("Remote item disappeared: {}", key))?;
+                self.verify_remote_bytes(key, &bytes)?;
                 self.write_local_file(key, &bytes)?;
                 let meta = self.meta_for_key(key, &bytes)?;
                 self.state.last_local.insert(key.clone(), meta);
@@ -933,7 +1039,10 @@ impl SyncEngine {
         }
         if remote_tombstone {
             let bytes = match self.client.get(&tombstone_key).await? {
-                Some(bytes) => bytes,
+                Some(bytes) => {
+                    self.verify_remote_bytes(&tombstone_key, &bytes)?;
+                    bytes
+                }
                 None => serde_json::to_vec(&serde_json::json!({
                     "book_id": id,
                     "deleted_at": now_secs(),
@@ -1062,7 +1171,14 @@ impl SyncEngine {
             items: remote_items,
         };
         let bytes = serde_json::to_vec(&manifest)?;
-        self.client.put(MANIFEST_FILE, bytes).await?;
+        self.client
+            .put_manifest_conditional(
+                MANIFEST_FILE,
+                bytes,
+                self.current_remote_etag.as_deref(),
+                !self.current_remote_exists,
+            )
+            .await?;
 
         self.state.last_local = final_local.items;
         self.state.last_remote = manifest;
@@ -1074,6 +1190,9 @@ impl SyncEngine {
     fn bytes_for_key(&self, key: &str) -> anyhow::Result<Vec<u8>> {
         if key == "settings.json" {
             return syncable_settings_bytes(&self.store.load_settings());
+        }
+        if key == "library.json" {
+            return syncable_library_bytes(&self.store.paths.library_file);
         }
         let path = self.local_path_for_key(key)?;
         std::fs::read(&path).with_context(|| format!("failed to read local item {}", key))
@@ -1128,6 +1247,29 @@ impl SyncEngine {
     }
 
     fn write_local_file(&self, key: &str, bytes: &[u8]) -> anyhow::Result<()> {
+        if key == "library.json" {
+            let mut library: Vec<LibraryEntry> =
+                serde_json::from_slice(bytes).context("invalid remote library")?;
+            for entry in &mut library {
+                if !crate::storage::paths::is_safe_book_id(&entry.id) {
+                    bail!("invalid book id in remote library: {}", entry.id);
+                }
+                let format = match entry.format.to_ascii_lowercase().as_str() {
+                    "txt" => "txt",
+                    "" | "epub" => "epub",
+                    other => bail!("unsupported book format in remote library: {}", other),
+                };
+                entry.format = format.to_string();
+                entry.file_path = self
+                    .store
+                    .paths
+                    .book_path(&entry.id, format)
+                    .to_string_lossy()
+                    .to_string();
+            }
+            let normalized = serde_json::to_vec(&library)?;
+            return atomic_write(&self.store.paths.library_file, &normalized);
+        }
         if key == "settings.json" {
             let remote: AppSettings = serde_json::from_slice(bytes).context("invalid remote settings")?;
             let current = self.store.load_settings();
@@ -1176,6 +1318,24 @@ fn changed(current: Option<&FileMeta>, previous: Option<&FileMeta>) -> bool {
         (None, Some(_)) => true,
         (None, None) => false,
     }
+}
+
+fn syncable_library_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
+    let bytes = std::fs::read(path).context("failed to read local library")?;
+    let mut library: Vec<LibraryEntry> = serde_json::from_slice(&bytes).context("invalid local library")?;
+    for entry in &mut library {
+        if !crate::storage::paths::is_safe_book_id(&entry.id) {
+            bail!("invalid book id in local library: {}", entry.id);
+        }
+        let format = match entry.format.to_ascii_lowercase().as_str() {
+            "txt" => "txt",
+            "" | "epub" => "epub",
+            other => bail!("unsupported book format in local library: {}", other),
+        };
+        entry.format = format.to_string();
+        entry.file_path = format!("books/{}.{}", entry.id, format);
+    }
+    Ok(serde_json::to_vec(&library)?)
 }
 
 fn syncable_settings_bytes(settings: &AppSettings) -> anyhow::Result<Vec<u8>> {
@@ -1307,6 +1467,22 @@ fn hash_file(path: &Path) -> anyhow::Result<String> {
 fn hash_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+fn snapshot_fingerprint(snapshot: &Snapshot) -> String {
+    let mut keys: Vec<&String> = snapshot.items.keys().collect();
+    keys.sort();
+    let mut hasher = Sha256::new();
+    for key in keys {
+        let meta = &snapshot.items[key];
+        hasher.update(key.as_bytes());
+        hasher.update([0]);
+        hasher.update(meta.sha256.as_bytes());
+        hasher.update([0]);
+        hasher.update(meta.size.to_le_bytes());
+        hasher.update([0]);
+    }
     format!("{:x}", hasher.finalize())
 }
 
@@ -2280,6 +2456,42 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&dir_b);
+    }
+
+    #[tokio::test]
+    async fn apply_rejects_stale_local_preview() {
+        let (paths, dir) = temp_paths();
+        seed_local_book(&paths, "book-1", b"v1");
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let mut engine = SyncEngine::new(
+            paths.clone(),
+            Box::new(FakeWebDav::with_files(Arc::clone(&files))),
+        )
+        .unwrap();
+        let preview = engine.preview().await.unwrap();
+        std::fs::write(paths.book_path("book-1", "epub"), b"v2").unwrap();
+        let result = engine
+            .apply_with_fingerprints(
+                &[],
+                &preview.local_fingerprint,
+                &preview.remote_fingerprint,
+                |_, _, _| {},
+            )
+            .await;
+        assert!(result.is_err());
+        assert_eq!(files.lock().unwrap().len(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn syncable_library_does_not_export_machine_paths() {
+        let (paths, dir) = temp_paths();
+        seed_local_book(&paths, "book-1", b"v1");
+        let bytes = syncable_library_bytes(&paths.library_file).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("books/book-1.epub"));
+        assert!(!text.contains(paths.data_dir.to_string_lossy().as_ref()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

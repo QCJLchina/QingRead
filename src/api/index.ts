@@ -83,7 +83,15 @@ export const syncApi = {
   testConnection: (password: string | null) =>
     invoke<void>("test_sync_connection", { password }),
   preview: () => invoke<SyncPreview>("preview_sync"),
-  apply: (decisions: SyncDecision[]) => invoke<SyncSummary>("apply_sync", { decisions }),
+  apply: (payload: {
+    decisions: SyncDecision[];
+    expectedLocalFingerprint: string;
+    expectedRemoteFingerprint: string;
+  }) => invoke<SyncSummary>("apply_sync", {
+    decisions: payload.decisions,
+    expectedLocalFingerprint: payload.expectedLocalFingerprint,
+    expectedRemoteFingerprint: payload.expectedRemoteFingerprint,
+  }),
 };
 
 export const windowApi = {

@@ -116,6 +116,8 @@ export interface SyncAction {
 export interface SyncPreview {
   actions: SyncAction[];
   has_remote: boolean;
+  local_fingerprint: string;
+  remote_fingerprint: string;
 }
 
 export interface SyncSummary {

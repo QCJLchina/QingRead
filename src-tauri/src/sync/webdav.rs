@@ -6,8 +6,27 @@ use url::Url;
 #[async_trait]
 pub trait WebDavClient: Send + Sync {
     async fn ensure_root(&self) -> anyhow::Result<()>;
+    /// 确保根目录及同步使用的固定子目录存在。
+    async fn ensure_sync_dirs(&self) -> anyhow::Result<()> {
+        self.ensure_root().await
+    }
     async fn get(&self, path: &str) -> anyhow::Result<Option<Vec<u8>>>;
+    /// 获取资源内容和 ETag；旧的测试/客户端实现可以退化为无 ETag。
+    async fn get_with_etag(&self, path: &str) -> anyhow::Result<Option<(Vec<u8>, Option<String>)>> {
+        Ok(self.get(path).await?.map(|bytes| (bytes, None)))
+    }
     async fn put(&self, path: &str, bytes: Vec<u8>) -> anyhow::Result<()>;
+    /// 条件写入 manifest，避免覆盖其他设备刚提交的版本。
+    async fn put_manifest_conditional(
+        &self,
+        path: &str,
+        bytes: Vec<u8>,
+        etag: Option<&str>,
+        expect_absent: bool,
+    ) -> anyhow::Result<()> {
+        let _ = (etag, expect_absent);
+        self.put(path, bytes).await
+    }
     async fn delete(&self, path: &str) -> anyhow::Result<()>;
 }
 
@@ -37,6 +56,14 @@ impl ReqwestWebDavClient {
         if base_url.scheme() != "http" && base_url.scheme() != "https" {
             bail!("WebDAV 地址必须使用 http 或 https");
         }
+        if base_url.scheme() == "http" {
+            let host = base_url.host_str().unwrap_or_default();
+            let loopback = host.eq_ignore_ascii_case("localhost")
+                || host.parse::<std::net::IpAddr>().map(|ip| ip.is_loopback()).unwrap_or(false);
+            if !loopback {
+                bail!("WebDAV 远端必须使用 HTTPS；HTTP 仅允许本机回环地址");
+            }
+        }
         if !base_url.username().is_empty() || base_url.password().is_some() {
             bail!("WebDAV 地址中不要内嵌用户名或密码");
         }
@@ -60,6 +87,7 @@ impl ReqwestWebDavClient {
 
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(120))
             .build()
             .context("无法创建网络客户端")?;
 
@@ -82,32 +110,54 @@ impl ReqwestWebDavClient {
             .request(method, self.url_for(relative))
             .basic_auth(&self.username, Some(&self.password))
     }
+
+    async fn ensure_collection(&self, path: &str) -> anyhow::Result<()> {
+        let response = self
+            .request(webdav_method(b"MKCOL"), path)
+            .send()
+            .await
+            .context("无法连接 WebDAV 服务")?;
+        match response.status().as_u16() {
+            200 | 201 | 204 | 405 => Ok(()),
+            401 | 403 => Err(anyhow!("WebDAV 认证失败，请检查用户名和密码")),
+            status => Err(anyhow!("无法创建同步目录: HTTP {}", status)),
+        }
+    }
 }
 
 #[async_trait]
 impl WebDavClient for ReqwestWebDavClient {
     async fn ensure_root(&self) -> anyhow::Result<()> {
-        let response = self
-            .request(webdav_method(b"MKCOL"), "")
-            .send()
-            .await
-            .context("无法连接 WebDAV 服务")?;
-        let status = response.status();
-        match status.as_u16() {
-            200 | 201 | 204 | 301 | 302 | 405 => Ok(()),
-            401 | 403 => Err(anyhow!("WebDAV 认证失败，请检查用户名和密码")),
-            _ => Err(anyhow!("无法创建同步目录: HTTP {}", status)),
+        self.ensure_collection("").await
+    }
+
+    async fn ensure_sync_dirs(&self) -> anyhow::Result<()> {
+        for path in ["", "books/", "covers/", "progress/", "tombstones/"] {
+            self.ensure_collection(path).await?;
         }
+        Ok(())
     }
 
     async fn get(&self, path: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        Ok(self.get_with_etag(path).await?.map(|(bytes, _)| bytes))
+    }
+
+    async fn get_with_etag(&self, path: &str) -> anyhow::Result<Option<(Vec<u8>, Option<String>)>> {
         let response = self
             .request(reqwest::Method::GET, path)
             .send()
             .await
             .context("下载失败")?;
         match response.status().as_u16() {
-            200 => Ok(Some(response.bytes().await.context("读取下载内容失败")?.to_vec())),
+            200 => {
+                let etag = response
+                    .headers()
+                    .get(reqwest::header::ETAG)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToOwned::to_owned);
+                let bytes = response.bytes().await.context("读取下载内容失败")?.to_vec();
+                Ok(Some((bytes, etag)))
+            }
             404 => Ok(None),
             401 | 403 => Err(anyhow!("WebDAV 认证失败，请检查用户名和密码")),
             status => Err(anyhow!("下载失败: HTTP {}", status)),
@@ -128,6 +178,7 @@ impl WebDavClient for ReqwestWebDavClient {
         let response = self
             .request(webdav_method(b"MOVE"), &part_path)
             .header("Destination", to.as_str())
+            .header("Overwrite", "T")
             .send()
             .await;
 
@@ -152,6 +203,33 @@ impl WebDavClient for ReqwestWebDavClient {
                     .await
                     .map_err(|direct| anyhow!("上传失败: {e}; 回退直传也失败: {direct}"))
             }
+        }
+    }
+
+    async fn put_manifest_conditional(
+        &self,
+        path: &str,
+        bytes: Vec<u8>,
+        etag: Option<&str>,
+        expect_absent: bool,
+    ) -> anyhow::Result<()> {
+        let mut request = self
+            .request(reqwest::Method::PUT, path)
+            .header("Overwrite", "T")
+            .body(bytes);
+        if let Some(etag) = etag {
+            request = request.header("If-Match", etag);
+        } else if expect_absent {
+            request = request.header("If-None-Match", "*");
+        } else {
+            bail!("远端 manifest 没有 ETag，无法安全提交；请重新预览或更换支持 ETag 的服务");
+        }
+        let response = request.send().await.context("上传 manifest 失败")?;
+        match response.status().as_u16() {
+            200 | 201 | 204 => Ok(()),
+            401 | 403 => Err(anyhow!("WebDAV 认证失败，请检查用户名和密码")),
+            412 => Err(anyhow!("远端 manifest 已被其他设备更新，请重新预览同步")),
+            status => Err(anyhow!("上传 manifest 失败: HTTP {}", status)),
         }
     }
 
@@ -200,6 +278,15 @@ mod tests {
             .err()
             .unwrap();
         assert!(err.to_string().contains("."));
+    }
+
+    #[test]
+    fn rejects_insecure_remote_http_but_allows_loopback() {
+        let err = ReqwestWebDavClient::new("http://dav.example.com", "EpubReader", "u", "p")
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("HTTPS"));
+        assert!(ReqwestWebDavClient::new("http://127.0.0.1:8080", "EpubReader", "u", "p").is_ok());
     }
 
     #[test]

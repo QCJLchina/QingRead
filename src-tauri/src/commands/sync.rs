@@ -6,8 +6,12 @@ use crate::sync::config::{
 };
 use crate::sync::engine::{reset_sync_state, SyncDecision, SyncEngine, SyncPreview, SyncSummary};
 use crate::sync::webdav::{ReqwestWebDavClient, WebDavClient};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
+
+/// 防止同一进程内 preview/apply 同时读写本地文件和 sync_state.json。
+static SYNC_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConfigData {
@@ -88,14 +92,28 @@ pub async fn set_sync_config(
         return Err("WebDAV 地址和用户名不能为空".to_string());
     }
 
+    let username_changed = previous.username != config.username;
+    if username_changed
+        && password.trim().is_empty()
+        && get_password(&store, &config.username)
+            .map_err(|e| format!("读取新用户名密码失败: {e}"))?
+            .is_none()
+    {
+        return Err("更换 WebDAV 用户名时必须输入新密码".to_string());
+    }
+
     let config_changed = previous.server_url != config.server_url
-        || previous.username != config.username
+        || username_changed
         || previous.remote_dir != config.remote_dir;
 
-    save_sync_config(&store, &config).map_err(|e| format!("保存同步配置失败: {e}"))?;
     if !password.trim().is_empty() {
         set_password(&store, &config.username, &password)
             .map_err(|e| format!("保存密码失败: {e}"))?;
+    }
+    save_sync_config(&store, &config).map_err(|e| format!("保存同步配置失败: {e}"))?;
+    if username_changed && !previous.username.trim().is_empty() {
+        delete_password(&store, &previous.username)
+            .map_err(|e| format!("清理旧密码失败: {e}"))?;
     }
     if config_changed {
         reset_sync_state(&paths).map_err(|e| format!("重置同步状态失败: {e}"))?;
@@ -139,11 +157,12 @@ pub async fn test_sync_connection(
         &password,
     )
     .map_err(|e| e.to_string())?;
-    client.ensure_root().await.map_err(|e| e.to_string())
+    client.ensure_sync_dirs().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn preview_sync(state: State<'_, AppState>) -> Result<SyncPreview, String> {
+    let _sync_guard = SYNC_LOCK.lock().await;
     let paths = app_paths(&state)?;
     let mut engine = build_engine(paths)?;
     engine.preview().await.map_err(|e| e.to_string())
@@ -152,9 +171,16 @@ pub async fn preview_sync(state: State<'_, AppState>) -> Result<SyncPreview, Str
 #[tauri::command]
 pub async fn apply_sync(
     decisions: Vec<SyncDecision>,
+    expected_local_fingerprint: Option<String>,
+    expected_remote_fingerprint: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<SyncSummary, String> {
+    let _sync_guard = SYNC_LOCK.lock().await;
+    let expected_local_fingerprint = expected_local_fingerprint
+        .ok_or_else(|| "同步计划缺少本地快照，请重新预览同步".to_string())?;
+    let expected_remote_fingerprint = expected_remote_fingerprint
+        .ok_or_else(|| "同步计划缺少远端快照，请重新预览同步".to_string())?;
     let paths = app_paths(&state)?;
     let mut engine = build_engine(paths)?;
     let _ = app.emit(
@@ -167,7 +193,11 @@ pub async fn apply_sync(
     );
 
     let result = engine
-        .apply(&decisions, |current, total, label| {
+        .apply_with_fingerprints(
+            &decisions,
+            &expected_local_fingerprint,
+            &expected_remote_fingerprint,
+            |current, total, label| {
             let _ = app.emit(
                 "sync-progress",
                 serde_json::json!({
@@ -176,7 +206,8 @@ pub async fn apply_sync(
                     "total": total,
                 }),
             );
-        })
+            },
+        )
         .await;
 
     match result {

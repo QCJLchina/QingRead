@@ -188,7 +188,11 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     }));
     set({ error: null, message: null, applying: true, progress: null });
     try {
-      const summary = await syncApi.apply(syncDecisions);
+      const summary = await syncApi.apply({
+        decisions: syncDecisions,
+        expectedLocalFingerprint: preview.local_fingerprint,
+        expectedRemoteFingerprint: preview.remote_fingerprint,
+      });
       set({
         applying: false,
         progress: null,
