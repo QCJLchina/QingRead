@@ -4,7 +4,13 @@ import { clampWindowSize, presetById } from "../lib/window-presets";
 import type { WindowLayoutId, WindowSettings } from "../types";
 
 /** 阅读页里的浮层。同一时刻只开一个。 */
-export type ReaderPanel = "none" | "reading" | "window" | "search";
+export type ReaderPanel =
+  | "none"
+  | "reading"
+  | "window"
+  | "search"
+  | "bookmarks"
+  | "history";
 
 export const defaultWindowSettings: WindowSettings = {
   layout: "standard",

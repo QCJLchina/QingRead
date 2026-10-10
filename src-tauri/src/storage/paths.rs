@@ -10,6 +10,8 @@ pub struct AppPaths {
     pub settings_file: PathBuf,
     pub library_file: PathBuf,
     pub progress_dir: PathBuf,
+    /// 每本书的阅读资料：阅读状态、书签、访问历史。参与 WebDAV 同步。
+    pub reading_data_dir: PathBuf,
     pub sync_config_file: PathBuf,
     pub sync_state_file: PathBuf,
     pub tombstones_dir: PathBuf,
@@ -38,10 +40,11 @@ impl AppPaths {
         let covers_dir = base.join("covers");
         let assets_dir = base.join("assets");
         let progress_dir = base.join("progress");
+        let reading_data_dir = base.join("reading-data");
         let settings_file = base.join("settings.json");
         let library_file = base.join("library.json");
         let sync_config_file = base.join("sync_config.json");
-        let sync_state_file = base.join("sync_state.json");
+        let sync_state_file = base.join("sync_state_v2.json");
         let tombstones_dir = base.join("tombstones");
         let window_file = base.join("window.json");
 
@@ -53,6 +56,7 @@ impl AppPaths {
             settings_file,
             library_file,
             progress_dir,
+            reading_data_dir,
             sync_config_file,
             sync_state_file,
             tombstones_dir,
@@ -66,6 +70,7 @@ impl AppPaths {
         std::fs::create_dir_all(&self.covers_dir)?;
         std::fs::create_dir_all(&self.assets_dir)?;
         std::fs::create_dir_all(&self.progress_dir)?;
+        std::fs::create_dir_all(&self.reading_data_dir)?;
         std::fs::create_dir_all(&self.tombstones_dir)?;
         Ok(())
     }
@@ -81,6 +86,10 @@ impl AppPaths {
 
     pub fn progress_path(&self, id: &str) -> PathBuf {
         self.progress_dir.join(format!("{}.json", id))
+    }
+
+    pub fn reading_data_path(&self, id: &str) -> PathBuf {
+        self.reading_data_dir.join(format!("{}.json", id))
     }
 
     pub fn custom_bg_path(&self, ext: &str) -> PathBuf {

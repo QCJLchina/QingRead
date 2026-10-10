@@ -1,6 +1,15 @@
 # 轻阅 / QingRead v3
 
 基于 Tauri 2 + React 18 + Rust 的轻量级电子书阅读器，支持 EPUB 和 TXT 格式。产品名为 **轻阅 / QingRead**。
+## v3.0.5 更新
+
+- 书架支持书名/作者搜索、排序和未读/在读/已读筛选。
+- 新增带备注的书签及每本书最近 200 条访问历史。
+- 搜索支持跨文本节点匹配和精确分页/滚动定位。
+- 阅读资料统一纳入 WebDAV 预览、冲突选择、删除传播与恢复。
+- 新版同步使用配置目录下的 `qingread-sync-v2/`，首次上传本机数据；原远端目录保留，旧版本客户端继续使用原目录。仅在旧远端存在的数据不会自动迁移到新版目录。
+- 修复自动打开覆盖已读状态、损坏资料被静默覆盖和窄窗口工具栏拥挤问题；退出前等待阅读位置保存。
+
 ## 特性
 
 | 功能 | 说明 |
@@ -10,7 +19,7 @@
 | 自定义背景 | 支持上传 JPG/PNG/WebP 作阅读底图 |
 | 章节导航 | 侧边栏目录，点击跳任意章节 |
 | 阅读进度 | 自动保存，重开书回到上次位置 |
-| 全局搜索 | 跨章节模糊搜索（中英混合） |
+| 全局搜索 | 连续文本匹配、同章多次命中、上一处/下一处、取消与续建索引 |
 | 系统托盘 | 最小化到托盘，后台运行（可选） |
 | 数据目录 | 自定义书籍/进度/设置存放路径 |
 | 拖入添加 | 书架页面直接拖入 EPUB/TXT 添加 |
@@ -33,7 +42,7 @@
 
 ### 方式一：NSIS 安装器（推荐）
 
-1. 双击 `QingRead_3.0.1_x64-setup.exe`
+1. 双击 `QingRead_3.0.5_x64-setup.exe`
 2. 按向导安装
 3. 从开始菜单或桌面快捷方式启动
 
@@ -41,7 +50,7 @@
 
 ### 方式二：绿色版（免安装）
 
-1. 解压 `QingRead_3.0.1_x64-portable.zip` 到任意目录
+1. 解压 `QingRead_3.0.5_x64-portable.zip` 到任意目录
 2. 双击其中的 `qingread.exe` 运行，首次启动会在 `%APPDATA%\EpubReader\` 创建数据目录
 3. 想换地方就整个目录挪走，不写注册表，卸载时直接删目录
 
@@ -118,6 +127,7 @@
 ├── books/           # 电子书源文件
 ├── covers/          # 封面图片缓存
 ├── progress/        # 阅读进度（章节 + 正文字符锚点）
+├── reading-data/    # 阅读状态、书签与访问历史
 ├── library.json     # 书架列表
 ├── settings.json    # 用户设置（含阅读排版）
 └── window.json      # 本机窗口形态与低干扰偏好（不参与同步）
@@ -229,7 +239,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 
 # 产物位置
 src-tauri\target\release\qingread.exe                                # 绿色版可执行文件
-src-tauri\target\release\bundle\nsis\QingRead_3.0.1_x64-setup.exe  # NSIS 安装器
+src-tauri\target\release\bundle\nsis\QingRead_3.0.5_x64-setup.exe  # NSIS 安装器
 ```
 
 `build.ps1` 优先使用项目内 `.tools\cargo-home` 的 Rust 工具链（若存在），否则回退到 PATH 上的 cargo；两者都没有时会明确报错。
@@ -260,11 +270,11 @@ registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
 流水线会校验），再去 Actions 页手动 Run workflow 干跑一次确认构建通过，最后打标签：
 
 ```powershell
-git tag -a v3.0.1 -m "轻阅 v3.0.1"
-git push origin v3.0.1
+git tag -a v3.0.5 -m "轻阅 v3.0.5"
+git push origin v3.0.5
 ```
 
-标签必须与版本号一致（`v3.0.1` 对应 `3.0.1`），对不上流水线会直接失败。
+标签必须与版本号一致（`v3.0.5` 对应 `3.0.5`），对不上流水线会直接失败。
 流水线只创建 draft release，release notes 需要你在网页上补充后再手动 Publish。
 
 ---

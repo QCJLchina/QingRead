@@ -1,16 +1,25 @@
 import { useNavigate } from "react-router-dom";
 import Icon from "./icons";
 import { useLibraryStore } from "../store/library";
-import type { BookInfo } from "../types";
+import { statusLabel } from "../lib/library-filter";
+import type { BookInfo, ReadingStatus } from "../types";
 import BookLogo from "./BookLogo";
 
 interface BookCardProps {
   book: BookInfo;
   selectionMode: boolean;
   view: "grid" | "list";
+  status: ReadingStatus;
+  onStatusChange: (bookId: string, status: ReadingStatus) => void;
 }
 
-export default function BookCard({ book, selectionMode, view }: BookCardProps) {
+export default function BookCard({
+  book,
+  selectionMode,
+  view,
+  status,
+  onStatusChange,
+}: BookCardProps) {
   const navigate = useNavigate();
   const { removeBook, selectedIds, toggleSelect, progress } = useLibraryStore();
   const isSelected = selectedIds.has(book.id);
@@ -32,6 +41,35 @@ export default function BookCard({ book, selectionMode, view }: BookCardProps) {
   };
 
   const progressLabel = entry ? "读到第 " + (entry.chapter_index + 1) + " 章" : "";
+
+  // 点击状态徽标不会触发打开书籍
+  const cycleStatus = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    const next: ReadingStatus =
+      status === "unread" ? "reading" : status === "reading" ? "finished" : "unread";
+    onStatusChange(book.id, next);
+  };
+
+  const statusBadge = (
+    <span
+      className={"status-badge is-" + status}
+      title={
+        status === "finished"
+          ? "已读（点击改为未读）"
+          : status === "reading"
+            ? "在读（点击标为已读）"
+            : "未读（点击标为在读）"
+      }
+      onClick={cycleStatus}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") cycleStatus(event as unknown as React.MouseEvent);
+      }}
+    >
+      {statusLabel(status)}
+    </span>
+  );
 
   if (view === "list") {
     return (
@@ -61,6 +99,7 @@ export default function BookCard({ book, selectionMode, view }: BookCardProps) {
             {progressLabel ? " · " + progressLabel : ""}
           </span>
         </div>
+        {!selectionMode && statusBadge}
         <span className="row-format">{book.format?.toUpperCase() ?? "EPUB"}</span>
         {!selectionMode && (
           <div className="row-actions">
@@ -96,7 +135,10 @@ export default function BookCard({ book, selectionMode, view }: BookCardProps) {
       <div className="info">
         <span className="title">{book.title}</span>
         <span className="author">{book.author || "未知作者"}</span>
-        {progressLabel && <span className="progress-note">{progressLabel}</span>}
+        <div className="info-meta">
+          {progressLabel && <span className="progress-note">{progressLabel}</span>}
+          {statusBadge}
+        </div>
       </div>
       {!selectionMode && (
         <div className="card-actions">

@@ -128,11 +128,21 @@ impl ReqwestWebDavClient {
 #[async_trait]
 impl WebDavClient for ReqwestWebDavClient {
     async fn ensure_root(&self) -> anyhow::Result<()> {
+        // 新版目录位于用户配置目录下；首次使用时先创建父目录。
+        self.ensure_collection("../").await?;
         self.ensure_collection("").await
     }
 
     async fn ensure_sync_dirs(&self) -> anyhow::Result<()> {
-        for path in ["", "books/", "covers/", "progress/", "tombstones/"] {
+        self.ensure_root().await?;
+        for path in [
+            "",
+            "books/",
+            "covers/",
+            "progress/",
+            "tombstones/",
+            "reading-data/",
+        ] {
             self.ensure_collection(path).await?;
         }
         Ok(())

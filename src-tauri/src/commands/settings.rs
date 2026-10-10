@@ -134,6 +134,11 @@ pub async fn set_data_dir(
             copy_dir_recursive(&store.paths.progress_dir, &new_paths.progress_dir)
                 .map_err(|e| format!("Failed to migrate progress: {}", e))?;
         }
+        // 阅读资料（阅读状态 / 书签 / 历史）
+        if store.paths.reading_data_dir.exists() {
+            copy_dir_recursive(&store.paths.reading_data_dir, &new_paths.reading_data_dir)
+                .map_err(|e| format!("Failed to migrate reading data: {}", e))?;
+        }
         // 书籍本体（导入时已经复制到 data_dir/books/）
         if store.paths.books_dir.exists() {
             copy_dir_recursive(&store.paths.books_dir, &new_paths.books_dir)

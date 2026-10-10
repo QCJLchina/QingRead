@@ -117,6 +117,17 @@ fn main() {
     // 这样用户之前在设置里改过目录后，重启应用仍然能落到原位置。
     let initial_data_dir = read_persisted_data_dir();
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                import_launch_files(&app, args.into_iter().skip(1), std::path::Path::new(&cwd));
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            });
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(AppState::new(initial_data_dir))
@@ -143,6 +154,17 @@ fn main() {
             commands::progress::save_progress,
             commands::progress::load_progress,
             commands::progress::list_progress,
+            // Reading data（阅读状态 / 书签 / 历史）
+            commands::reading_data::get_reading_data,
+            commands::reading_data::list_reading_summaries,
+            commands::reading_data::set_reading_status,
+            commands::reading_data::mark_reading_started,
+            commands::close::complete_reader_close,
+            commands::reading_data::add_bookmark,
+            commands::reading_data::update_bookmark,
+            commands::reading_data::delete_bookmark,
+            commands::reading_data::append_history,
+            commands::reading_data::clear_history,
             // Settings
             commands::settings::get_settings,
             commands::settings::save_settings,
@@ -174,51 +196,13 @@ fn main() {
                 let _ = window.set_focus();
             }
 
+            tray::refresh_tray(app.handle());
+
             // 全局隐藏/恢复快捷键。注册失败只会没有快捷键，托盘菜单仍然可用。
             hotkey::set_hotkey(app.handle().clone(), window_settings.hide_hotkey.clone());
 
-            // 处理 CLI 启动参数：自动导入传入的 EPUB/TXT
-            let args: Vec<String> = std::env::args().skip(1).collect();
-            for arg in args {
-                let lower = arg.to_lowercase();
-                if !lower.ends_with(".epub") && !lower.ends_with(".txt") {
-                    continue;
-                }
-                let path = std::path::PathBuf::from(&arg);
-                if !path.exists() {
-                    continue;
-                }
-                let state = app.state::<AppState>();
-                if let Ok(store) = state.store.lock() {
-                    if lower.ends_with(".epub") {
-                        if let Ok(book_index) = crate::epub::parser::EpubParser::load_index(&path) {
-                            let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                            let _ = store.add_book_with_format(
-                                book_index.metadata.clone(),
-                                &path.to_string_lossy(),
-                                file_size,
-                                "epub",
-                            );
-                        }
-                    } else if let Ok(txt) = crate::epub::txt_parser::TxtParser::quick_scan(&path) {
-                        let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                        let metadata = crate::epub::parser::BookMetadata {
-                            title: txt.title.clone(),
-                            author: txt.author.clone(),
-                            language: String::new(),
-                            publisher: String::new(),
-                            description: String::new(),
-                            cover_href: None,
-                        };
-                        let _ = store.add_book_with_format(
-                            metadata,
-                            &path.to_string_lossy(),
-                            file_size,
-                            "txt",
-                        );
-                    }
-                };
-            }
+            import_launch_files(app.handle(), std::env::args().skip(1),
+                &std::env::current_dir().unwrap_or_default());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -244,23 +228,8 @@ fn main() {
                             .unwrap_or_else(|| "quit".to_string())
                     };
 
-                    // 退出前先记录窗口形态，下次启动能回到同一个位置和大小
-                    let _ = commands::window::persist_current_layout(window.app_handle());
-
-                    match behavior.as_str() {
-                        "minimize_to_tray" => {
-                            // 最小化到托盘
-                            let _ = window.hide();
-                            api.prevent_close();
-                        }
-                        _ => {
-                            // 直接退出（默认）：移除托盘图标后退出，避免残留
-                            if let Some(tray) = window.app_handle().tray_by_id("main-tray") {
-                                let _ = tray.set_visible(false);
-                            }
-                            window.app_handle().exit(0);
-                        }
-                    }
+                    api.prevent_close();
+                    commands::close::request_close(window.app_handle(), behavior != "minimize_to_tray");
                 }
             }
         })
@@ -699,5 +668,48 @@ mod tests {
         let names = vec!["OEBPS/images/cover.jpg".to_string()];
 
         assert_eq!(find_entry_index(&names, "images/cover.jpg"), Some(0));
+    }
+}
+
+fn import_launch_files(
+    app: &tauri::AppHandle,
+    args: impl Iterator<Item = String>,
+    cwd: &std::path::Path,
+) {
+    for arg in args {
+        let Some(path) = launch_book_path(&arg, cwd) else { continue; };
+        let state = app.state::<AppState>();
+        if let Err(error) = commands::library::import_book_path(
+            path.to_string_lossy().into_owned(), app, &state,
+        ) {
+            eprintln!("[import] {error}");
+        }
+    }
+}
+
+fn launch_book_path(arg: &str, cwd: &std::path::Path) -> Option<std::path::PathBuf> {
+    let path = std::path::PathBuf::from(arg);
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    if extension != "epub" && extension != "txt" { return None; }
+    Some(if path.is_absolute() { path } else { cwd.join(path) })
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::launch_book_path;
+    use std::path::Path;
+
+    #[test]
+    fn resolves_relative_book_paths_against_launching_process_directory() {
+        let cwd = Path::new(r"D:\books");
+        assert_eq!(launch_book_path("中文书名.EPUB", cwd), Some(cwd.join("中文书名.EPUB")));
+        assert_eq!(launch_book_path(r"D:\other\book.txt", cwd), Some(Path::new(r"D:\other\book.txt").to_owned()));
+    }
+
+    #[test]
+    fn ignores_non_book_arguments() {
+        for argument in ["qingread.exe", "--help", "book.pdf", "folder"] {
+            assert!(launch_book_path(argument, Path::new(r"D:\books")).is_none());
+        }
     }
 }

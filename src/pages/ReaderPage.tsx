@@ -7,14 +7,24 @@ import ReaderSidebar from "../components/ReaderSidebar";
 import ReaderToolbar from "../components/ReaderToolbar";
 import ReadingSettingsPanel from "../components/ReadingSettingsPanel";
 import SearchPanel from "../components/SearchPanel";
+import BookmarksPanel from "../components/BookmarksPanel";
+import HistoryPanel from "../components/HistoryPanel";
 import WindowSizePanel from "../components/WindowSizePanel";
 import { useReaderLayout } from "../hooks/useReaderLayout";
 import type { ReaderLayoutInfo } from "../hooks/useReaderLayout";
 import { useReaderNavigation } from "../hooks/useReaderNavigation";
-import { applyMatchHighlight, clearMatchHighlight } from "../lib/highlight";
+import { clearIndex } from "../lib/search";
+import {
+  anchorAtPlainText,
+  applyHighlightAtPosition,
+  applyMatchHighlight,
+  clearMatchHighlight,
+} from "../lib/highlight";
 import { estimateBookProgress } from "../lib/pagination";
 import { useLibraryStore } from "../store/library";
-import { useReaderStore } from "../store/reader";
+import { useReaderStore, flushProgressWrites } from "../store/reader";
+import { useReadingStore, flushReadingWrites } from "../store/reading";
+import { registerClosePreparation } from "../lib/close-preparation";
 import {
   backgroundImageCss,
   resolveContentPadding,
@@ -23,7 +33,7 @@ import {
 } from "../store/settings";
 import { useWindowStore } from "../store/window";
 import { windowApi } from "../api";
-import type { ReaderMode, TextAnchor } from "../types";
+import type { Bookmark, HistoryEntry, ReaderMode, TextAnchor } from "../types";
 
 /** 正文可用宽度低于这个值时，目录和工具栏改用浮层 / 精简形态 */
 const NARROW_WIDTH = 600;
@@ -73,12 +83,16 @@ export default function ReaderPage() {
 
   const books = useLibraryStore((state) => state.books);
   const loadBooks = useLibraryStore((state) => state.loadBooks);
+  const readingData = useReadingStore((state) => (bookId ? state.data[bookId] : undefined));
+  const loadReadingBook = useReadingStore((state) => state.loadBook);
+  const ensureStatus = useReadingStore((state) => state.ensureStatus);
+  const addBookmarkAction = useReadingStore((state) => state.addBookmark);
+  const appendHistory = useReadingStore((state) => state.appendHistory);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const saveTimerRef = useRef<number | null>(null);
-  const pendingHighlightRef = useRef<string | null>(null);
   const [returnAnchor, setReturnAnchor] = useState<{ chapterIndex: number; anchor: TextAnchor } | null>(null);
   const [layoutInfo, setLayoutInfo] = useState<ReaderLayoutInfo>({
     page: 0,
@@ -99,7 +113,12 @@ export default function ReaderPage() {
 
   useEffect(() => {
     if (bookId) void openBook(bookId);
-    return () => clearReader();
+    return () => {
+      openRecordedRef.current = null;
+      clearReader();
+      // 返回书架时释放索引：缓存只限当前书、当前应用会话
+      clearIndex();
+    };
   }, [bookId, openBook, clearReader]);
 
   useEffect(() => {
@@ -107,13 +126,21 @@ export default function ReaderPage() {
   }, [books.length, loadBooks]);
 
   useEffect(() => {
+    if (bookId) void loadReadingBook(bookId).catch((error) => setHotkeyNotice(String(error)));
+  }, [bookId, loadReadingBook]);
+
+  useEffect(() => {
     void loadWindowSettings();
   }, [loadWindowSettings]);
 
   useEffect(() => {
     clearMatchHighlight();
-    pendingHighlightRef.current = null;
+
+
   }, [contentKey]);
+
+
+
 
   useEffect(() => {
     if (!currentChapter) return;
@@ -176,21 +203,44 @@ export default function ReaderPage() {
     [mode, saveProgress],
   );
 
+  // 打开书籍后正文排版完成时，记录一次实际可见位置。
+  const openRecordedRef = useRef<string | null>(null);
+
   const handleSettled = useCallback(
     (info: ReaderLayoutInfo) => {
       setLayoutInfo(info);
-      const snippet = pendingHighlightRef.current;
-      if (snippet && trackRef.current) {
-        pendingHighlightRef.current = null;
-        applyMatchHighlight(trackRef.current, snippet);
-      }
+      const track = trackRef.current;
       if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = window.setTimeout(() => {
         saveTimerRef.current = null;
         commitProgress(info);
       }, SAVE_DEBOUNCE_MS);
+
+      if (bookId && currentChapter && info.anchor && openRecordedRef.current !== bookId) {
+        openRecordedRef.current = bookId;
+        void ensureStatus(bookId, "reading").catch((error) => setHotkeyNotice(String(error)));
+        void appendHistory({
+          bookId,
+          kind: "open",
+          chapterIndex: currentChapter.index,
+          anchor: info.anchor,
+          snippet: info.anchor.snippet,
+        }).catch((error) => setHotkeyNotice(String(error)));
+      }
+
+      const jump = jumpRef.current;
+      if (jump && jump.id === info.requestId && currentChapter?.index === jump.chapterIndex && bookId) {
+        jumpRef.current = null;
+        if (jump.search && track) applyHighlightAtPosition(track, jump.search.position, jump.search.length);
+        setReturnAnchor(jump.origin);
+        void (async () => {
+          if (jump.origin) await appendHistory({ bookId, kind: "jump", chapterIndex: jump.origin.chapterIndex, anchor: jump.origin.anchor, snippet: jump.origin.anchor.snippet });
+          if (info.anchor) await appendHistory({ bookId, kind: "jump", chapterIndex: jump.chapterIndex, anchor: info.anchor, snippet: info.anchor.snippet });
+        })().catch((error) => setHotkeyNotice(String(error)));
+        if (info.approximate) setHotkeyNotice("无法精确定位，已跳至附近位置");
+      }
     },
-    [commitProgress],
+    [appendHistory, bookId, commitProgress, currentChapter, ensureStatus, setHotkeyNotice],
   );
 
   const layout = useReaderLayout({
@@ -198,7 +248,7 @@ export default function ReaderPage() {
     trackRef,
     mode,
     contentKey,
-    ready: Boolean(currentChapter),
+    ready: Boolean(currentChapter) && !loading,
     fontSize: settings.font_size,
     lineHeight: settings.line_height,
     fontFamily: settings.font_family,
@@ -245,39 +295,74 @@ export default function ReaderPage() {
     },
   });
 
-  const handleBackToShelf = useCallback(() => {
+  const persistBeforeLeave = useCallback(async () => {
     if (saveTimerRef.current !== null) {
       window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
     }
-    commitProgress(layout.snapshot());
-    navigate("/");
-  }, [commitProgress, layout, navigate]);
+    const snapshot = layout.snapshot();
+    if (currentChapter && bookId) {
+      commitProgress(snapshot);
+      if (snapshot.anchor) await appendHistory({ bookId, kind: "leave", chapterIndex: currentChapter.index, anchor: snapshot.anchor, snippet: snapshot.anchor.snippet });
+    }
+    await Promise.all([flushProgressWrites(), flushReadingWrites()]);
+  }, [appendHistory, bookId, commitProgress, currentChapter, layout]);
 
+  useEffect(() => registerClosePreparation(persistBeforeLeave), [persistBeforeLeave]);
+
+  const handleBackToShelf = () => {
+    void persistBeforeLeave().then(() => navigate("/")).catch((error) => setHotkeyNotice("保存失败，未离开阅读：" + String(error)));
+  };
+  const jumpSequenceRef = useRef(0);
+  const jumpRef = useRef<{ id: number; chapterIndex: number; origin: { chapterIndex: number; anchor: TextAnchor } | null; search?: { position: number; length: number } } | null>(null);
+  const jumpTo = useCallback(async (chapterIndex: number, anchor?: TextAnchor, search?: { position: number; length: number }) => {
+    if (!bookId || loading) return;
+    const snapshot = layout.snapshot();
+    const origin = currentChapter && snapshot.anchor ? { chapterIndex: currentChapter.index, anchor: snapshot.anchor } : null;
+    const id = ++jumpSequenceRef.current;
+    jumpRef.current = { id, chapterIndex, origin, search };
+    if (!search) closePanel();
+    const ok = await loadChapter(chapterIndex, { anchor, textPosition: search?.position, ratio: anchor?.ratio ?? 0, requestId: id });
+    if (!ok && jumpRef.current?.id === id) jumpRef.current = null;
+  }, [bookId, loading, currentChapter, layout, loadChapter, closePanel]);
   const handleToggleMode = useCallback(() => {
     void setReadingMode(mode === "paged" ? "scroll" : "paged");
   }, [mode, setReadingMode]);
 
-  const handleSearchJump = useCallback(
-    (chapterIndex: number, snippet: string) => {
-      const snapshot = layout.snapshot();
-      if (currentChapter && snapshot.anchor) {
-        setReturnAnchor({ chapterIndex: currentChapter.index, anchor: snapshot.anchor });
-      }
-      closePanel();
-      pendingHighlightRef.current = snippet;
-      const anchor: TextAnchor = { path: [], offset: 0, snippet, ratio: 0 };
-      void loadChapter(chapterIndex, { anchor });
-    },
-    [closePanel, currentChapter, layout, loadChapter],
-  );
+  const hasBookmarkHere = useMemo(() => {
+    if (!readingData || !currentChapter || !layoutInfo.anchor) return false;
+    return readingData.bookmarks.some((item) =>
+      item.chapter_index === currentChapter.index &&
+      item.anchor.offset === layoutInfo.anchor?.offset &&
+      JSON.stringify(item.anchor.path) === JSON.stringify(layoutInfo.anchor?.path));
+  }, [currentChapter, readingData, layoutInfo.anchor]);
 
-  const handleReturnToPrevious = useCallback(() => {
+  const handleAddBookmark = useCallback(async () => {
+    if (!bookId || !currentChapter) return;
+    const snapshot = layout.snapshot();
+    if (!snapshot.anchor) return;
+    try {
+      const result = await addBookmarkAction({
+        bookId,
+        chapterIndex: currentChapter.index,
+        anchor: snapshot.anchor,
+        snippet: snapshot.anchor.snippet,
+      });
+      setHotkeyNotice(result.created ? "已添加书签" : "此处已有书签");
+      if (!result.created) openPanel("bookmarks");
+    } catch {
+      setHotkeyNotice("书签保存失败，请重试");
+    }
+  }, [addBookmarkAction, bookId, currentChapter, layout, setHotkeyNotice, openPanel]);
+
+  const handleBookmarkJump = (chapterIndex: number, bookmark: Bookmark) => void jumpTo(chapterIndex, bookmark.anchor);
+  const handleHistoryJump = (chapterIndex: number, entry: HistoryEntry) => void jumpTo(chapterIndex, entry.anchor);
+  const handleSearchJump = (chapterIndex: number, position: number, length: number) => void jumpTo(chapterIndex, undefined, { position, length });
+  const handleReturnToPrevious = () => {
     if (!returnAnchor) return;
-    void loadChapter(returnAnchor.chapterIndex, { anchor: returnAnchor.anchor });
+    void jumpTo(returnAnchor.chapterIndex, returnAnchor.anchor);
     setReturnAnchor(null);
-  }, [loadChapter, returnAnchor]);
-
+  };
   const handleApplyPreset = useCallback(
     (id: Parameters<typeof applyPreset>[0]) => {
       void applyPreset(id);
@@ -364,6 +449,10 @@ export default function ReaderPage() {
         onCurtain={() => setCurtain(true)}
         onHideWindow={handleHideWindow}
         onRestoreToolbar={() => setToolbarHidden(false)}
+        onAddBookmark={() => void handleAddBookmark()}
+        onOpenBookmarks={() => openPanel("bookmarks")}
+        onOpenHistory={() => openPanel("history")}
+        hasBookmarkHere={hasBookmarkHere}
       />
 
       <div className="reader-body">
@@ -375,12 +464,12 @@ export default function ReaderPage() {
             currentIndex={currentChapter?.index ?? -1}
             overlay={narrow}
             onSelect={(index) => {
-              void loadChapter(index, { page: 0, ratio: 0 });
+              void jumpTo(index);
               if (narrow) closeSidebar();
             }}
             onClose={closeSidebar}
-            onPrevChapter={() => goChapter(-1)}
-            onNextChapter={() => goChapter(1)}
+            onPrevChapter={() => currentChapter && void jumpTo(currentChapter.index - 1)}
+            onNextChapter={() => currentChapter && void jumpTo(currentChapter.index + 1)}
           />
         )}
 
@@ -420,6 +509,22 @@ export default function ReaderPage() {
 
             {panel === "search" && (
               <SearchPanel onClose={closePanel} onJump={handleSearchJump} />
+            )}
+
+            {panel === "bookmarks" && bookId && (
+              <BookmarksPanel
+                bookId={bookId}
+                onClose={closePanel}
+                onJump={handleBookmarkJump}
+              />
+            )}
+
+            {panel === "history" && bookId && (
+              <HistoryPanel
+                bookId={bookId}
+                onClose={closePanel}
+                onJump={handleHistoryJump}
+              />
             )}
 
             {panel === "reading" && (

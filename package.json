@@ -1,13 +1,13 @@
 {
   "name": "qingread",
   "private": true,
-  "version": "3.0.3",
+  "version": "3.0.5",
   "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "test": "node --test src/lib/search.test.ts src/lib/pagination.test.ts src/lib/anchor.test.ts src/lib/window-presets.test.ts",
+    "test": "node --test src/lib/search.test.ts src/lib/library-filter.test.ts src/lib/text-model.test.ts src/lib/bookmark-order.test.ts src/lib/pagination.test.ts src/lib/anchor.test.ts src/lib/window-presets.test.ts",
     "preview": "vite preview",
     "tauri": "tauri"
   },

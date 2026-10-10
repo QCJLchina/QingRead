@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 pub use crate::sync::state::reset as reset_sync_state;
 
-const MANIFEST_FILE: &str = "manifest.json";
+pub(crate) const MANIFEST_FILE: &str = "manifest.json";
 const VALID_IMAGE_EXTS: [&str; 5] = ["jpg", "jpeg", "png", "webp", "gif"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,6 +71,28 @@ pub struct SyncAction {
     pub remote_exists: bool,
     pub conflict_type: Option<String>,
     pub direction: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_reading: Option<ReadingConflictSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_reading: Option<ReadingConflictSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadingConflictSummary {
+    pub status: String,
+    pub bookmarks: usize,
+    pub history: usize,
+    pub updated_at: u64,
+}
+
+fn reading_summary(bytes: &[u8]) -> anyhow::Result<ReadingConflictSummary> {
+    let data: crate::storage::store::ReadingData = serde_json::from_slice(bytes)?;
+    Ok(ReadingConflictSummary {
+        status: data.status,
+        bookmarks: data.bookmarks.len(),
+        history: data.history.len(),
+        updated_at: data.updated_at,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,7 +158,20 @@ impl SyncEngine {
         self.current_remote = remote.manifest.clone();
         self.current_remote_etag = remote.etag.clone();
         self.current_remote_exists = remote.exists;
-        let actions = self.plan_actions(&local, &remote.manifest);
+        let mut actions = self.plan_actions(&local, &remote.manifest);
+        for action in &mut actions {
+            if action.kind == ActionKind::Conflict && action.id.starts_with("reading-data/") {
+                if action.local_exists {
+                    action.local_reading = Some(reading_summary(&self.bytes_for_key(&action.id)?)?);
+                }
+                if action.remote_exists {
+                    let bytes = self.client.get(&action.id).await?
+                        .ok_or_else(|| anyhow!("远端阅读资料已变化，请重新预览"))?;
+                    self.verify_remote_bytes(&action.id, &bytes)?;
+                    action.remote_reading = Some(reading_summary(&bytes)?);
+                }
+            }
+        }
         Ok(SyncPreview {
             actions,
             has_remote: !remote.manifest.items.is_empty(),
@@ -371,6 +406,19 @@ impl SyncEngine {
             &self.state.last_local,
         )?;
         add_dir_items(
+            &self.store.paths.reading_data_dir,
+            &mut items,
+            |name, id, ext| {
+                if ext == "json" {
+                    let _ = name;
+                    Some(format!("reading-data/{}.json", id))
+                } else {
+                    None
+                }
+            },
+            &self.state.last_local,
+        )?;
+        add_dir_items(
             &self.store.paths.tombstones_dir,
             &mut items,
             |name, id, ext| {
@@ -442,7 +490,10 @@ impl SyncEngine {
     async fn fetch_remote_manifest(&self) -> anyhow::Result<RemoteManifest> {
         match self.client.get_with_etag(MANIFEST_FILE).await? {
             Some((bytes, etag)) => {
-                let manifest = serde_json::from_slice(&bytes).context("invalid remote manifest")?;
+                let manifest: Manifest = serde_json::from_slice(&bytes).context("invalid remote manifest")?;
+                if manifest.version > 2 {
+                    bail!("远端同步协议版本过高，请升级轻阅");
+                }
                 Ok(RemoteManifest {
                     manifest,
                     fingerprint: hash_bytes(&bytes),
@@ -734,6 +785,7 @@ impl SyncEngine {
             format!("books/{}.txt", id),
             format!("covers/{}.jpg", id),
             format!("progress/{}.json", id),
+            format!("reading-data/{}.json", id),
         ];
         let tombstone_key = format!("tombstones/{}.json", id);
         let has_conflict = keys.iter().any(|key| {
@@ -868,6 +920,8 @@ impl SyncEngine {
             remote_exists,
             conflict_type: conflict_type.map(|s| s.to_string()),
             direction: direction.to_string(),
+            local_reading: None,
+            remote_reading: None,
         }
     }
 
@@ -974,6 +1028,7 @@ impl SyncEngine {
             format!("books/{}.txt", id),
             format!("covers/{}.jpg", id),
             format!("progress/{}.json", id),
+            format!("reading-data/{}.json", id),
         ];
         let tombstone_key = format!("tombstones/{}.json", id);
         let local_tombstone_path = self.store.paths.tombstone_path(id);
@@ -1166,7 +1221,7 @@ impl SyncEngine {
         }
 
         let manifest = Manifest {
-            version: self.current_remote.version.max(1),
+            version: 2,
             updated_at: now_secs(),
             items: remote_items,
         };
@@ -1241,12 +1296,21 @@ impl SyncEngine {
             }
             "covers" => Ok(self.store.paths.cover_path(id)),
             "progress" => Ok(self.store.paths.progress_path(id)),
+            "reading-data" => Ok(self.store.paths.reading_data_path(id)),
             "tombstones" => Ok(self.store.paths.tombstone_path(id)),
             _ => bail!("invalid sync key: {}", key),
         }
     }
 
     fn write_local_file(&self, key: &str, bytes: &[u8]) -> anyhow::Result<()> {
+        if let Some(file) = key.strip_prefix("reading-data/") {
+            let id = file.strip_suffix(".json").ok_or_else(|| anyhow!("invalid reading data key"))?;
+            let data: crate::storage::store::ReadingData = serde_json::from_slice(bytes)?;
+            if data.book_id != id || data.version > crate::storage::store::READING_DATA_VERSION {
+                bail!("远端阅读资料 ID 或版本不匹配");
+            }
+            return self.store.save_reading_data(&data);
+        }
         if key == "library.json" {
             let mut library: Vec<LibraryEntry> =
                 serde_json::from_slice(bytes).context("invalid remote library")?;
@@ -1424,7 +1488,7 @@ fn validate_remote_key(key: &str) -> bool {
     match dir {
         "books" => ext == "epub" || ext == "txt",
         "covers" => ext == "jpg",
-        "progress" | "tombstones" => ext == "json",
+        "progress" | "tombstones" | "reading-data" => ext == "json",
         _ => false,
     }
 }
@@ -1434,7 +1498,7 @@ fn valid_id(id: &str) -> bool {
 }
 
 fn book_id_from_key(key: &str) -> Option<&str> {
-    for prefix in ["books/", "covers/", "progress/", "tombstones/"] {
+    for prefix in ["books/", "covers/", "progress/", "tombstones/", "reading-data/"] {
         if let Some(rest) = key.strip_prefix(prefix) {
             return rest.split('.').next();
         }
@@ -1662,6 +1726,49 @@ mod tests {
             "close_behavior": "quit"
         });
         std::fs::write(&paths.settings_file, serde_json::to_vec(&settings).unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unified_sync_restores_reading_data_with_book_then_propagates_deletion() {
+        let (paths, dir) = temp_paths();
+        seed_local_book(&paths, "book-1", b"book");
+        let store = Store::new(Some(paths.data_dir.clone()));
+        store.add_bookmark(
+            "book-1", 0,
+            serde_json::json!({"path":[0],"offset":2,"snippet":"hello","ratio":0.2}),
+            "hello".to_string(), None,
+        ).unwrap();
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let mut engine = SyncEngine::new(paths.clone(), Box::new(FakeWebDav::with_files(files.clone()))).unwrap();
+        engine.preview().await.unwrap();
+        engine.apply(&[], |_, _, _| {}).await.unwrap();
+        assert!(files.lock().unwrap().contains_key("reading-data/book-1.json"));
+
+        store.remove_book("book-1").unwrap();
+        let mut remote_data: crate::storage::store::ReadingData = serde_json::from_slice(
+            &files.lock().unwrap()["reading-data/book-1.json"]
+        ).unwrap();
+        remote_data.status = "finished".to_string();
+        replace_remote_file(&files, "reading-data/book-1.json", serde_json::to_vec(&remote_data).unwrap(), "device-b");
+        let mut engine = SyncEngine::new(paths.clone(), Box::new(FakeWebDav::with_files(files.clone()))).unwrap();
+        let preview = engine.preview().await.unwrap();
+        assert!(preview.actions.iter().any(|a| a.conflict_type.as_deref() == Some("delete_vs_modify")));
+        let decisions: Vec<SyncDecision> = preview.actions.iter()
+            .filter(|a| a.kind == ActionKind::Conflict)
+            .map(|a| SyncDecision { id: a.id.clone(), choice: "remote".to_string() })
+            .collect();
+        engine.apply(&decisions, |_, _, _| {}).await.unwrap();
+        assert!(paths.book_path("book-1", "epub").exists());
+        assert_eq!(store.load_reading_data("book-1").unwrap().status, "finished");
+        assert_eq!(store.load_reading_data("book-1").unwrap().bookmarks.len(), 1);
+
+        store.remove_book("book-1").unwrap();
+        let mut engine = SyncEngine::new(paths.clone(), Box::new(FakeWebDav::with_files(files.clone()))).unwrap();
+        engine.preview().await.unwrap();
+        engine.apply(&[], |_, _, _| {}).await.unwrap();
+        assert!(!files.lock().unwrap().contains_key("reading-data/book-1.json"));
+        assert!(!paths.reading_data_path("book-1").exists());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     fn replace_remote_file(

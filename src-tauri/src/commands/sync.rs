@@ -47,7 +47,7 @@ fn build_engine(paths: AppPaths) -> Result<SyncEngine, String> {
         .ok_or_else(|| "未找到保存的密码，请重新输入密码并测试连接".to_string())?;
     let client = ReqwestWebDavClient::new(
         &config.server_url,
-        &config.remote_dir,
+        &format!("{}/qingread-sync-v2", config.remote_dir.trim_end_matches('/')),
         &config.username,
         &password,
     )
@@ -152,7 +152,7 @@ pub async fn test_sync_connection(
     };
     let client = ReqwestWebDavClient::new(
         &config.server_url,
-        &config.remote_dir,
+        &format!("{}/qingread-sync-v2", config.remote_dir.trim_end_matches('/')),
         &config.username,
         &password,
     )

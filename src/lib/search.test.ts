@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { stripHtml } from "./search.ts";
+import { pageSlice, searchPageCount, stripHtml } from "./search.ts";
 import { useLibraryStore } from "../store/library.ts";
 
 test("stripHtml removes tags and normalizes whitespace", () => {
@@ -12,6 +12,18 @@ test("stripHtml removes tags and normalizes whitespace", () => {
 
 test("stripHtml preserves readable text around empty elements", () => {
   assert.equal(stripHtml("Before<br><img src=\"cover.jpg\">After"), "Before After");
+});
+
+test("stripHtml decodes common HTML entities", () => {
+  assert.equal(stripHtml("<p>a &amp; b &lt;c&gt; &quot;d&quot; &#39;e&#39;</p>"), 'a & b <c> "d" \'e\'');
+});
+
+test("search pagination splits results into pages of 50", () => {
+  const items = Array.from({ length: 120 }, (_, i) => i);
+  assert.equal(searchPageCount(120), 3);
+  assert.equal(searchPageCount(0), 1);
+  assert.deepEqual(pageSlice(items, 1), items.slice(0, 50));
+  assert.deepEqual(pageSlice(items, 3), items.slice(100, 120));
 });
 
 test("library selection actions keep selected IDs consistent", () => {

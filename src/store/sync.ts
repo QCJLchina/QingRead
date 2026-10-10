@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import { syncApi } from "../api";
 import { useSettingsStore } from "./settings";
+import { useReadingStore } from "./reading";
+import { useLibraryStore } from "./library";
+import { clearIndex } from "../lib/search";
 import type {
   SyncConfigData,
   SyncDecision,
@@ -201,6 +204,12 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         message: summary.message,
       });
       useSettingsStore.getState().loadSettings();
+      useReadingStore.setState({ data: {}, summaries: {}, loadedBookId: null });
+      clearIndex();
+      await Promise.all([
+        useReadingStore.getState().loadSummaries(),
+        useLibraryStore.getState().loadBooks(),
+      ]);
     } catch (e) {
       set({ applying: false, progress: null, error: String(e) });
     }

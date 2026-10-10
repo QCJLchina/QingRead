@@ -18,7 +18,8 @@ interface LibraryState {
   removeBook: (bookId: string) => Promise<void>;
   batchRemoveBooks: (bookIds: string[]) => Promise<void>;
   toggleSelect: (bookId: string) => void;
-  selectAll: () => void;
+  /** 只选择当前筛选结果；不传参数时选择全部 */
+  selectAll: (bookIds?: string[]) => void;
   clearSelection: () => void;
   clearError: () => void;
 }
@@ -67,7 +68,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   importBook: async (path) => {
     try {
       const book = await libraryApi.import(path);
-      set({ books: [...get().books, book] });
+      set({ books: [...get().books.filter((entry) => entry.id !== book.id), book] });
       return book;
     } catch (error) {
       set({ error: String(error) });
@@ -122,8 +123,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     set({ selectedIds });
   },
 
-  selectAll: () => {
-    set({ selectedIds: new Set(get().books.map((book) => book.id)) });
+  selectAll: (bookIds) => {
+    const source = bookIds ?? get().books.map((book) => book.id);
+    set({ selectedIds: new Set(source) });
   },
 
   clearSelection: () => {

@@ -10,6 +10,8 @@ export interface PendingPosition {
   ratio: number | null;
   /** 从下一章往回翻时，停在该章末尾 */
   atEnd?: boolean;
+  textPosition?: number;
+  requestId?: number;
 }
 
 export interface OpenChapterOptions {
@@ -17,6 +19,8 @@ export interface OpenChapterOptions {
   page?: number | null;
   ratio?: number | null;
   atEnd?: boolean;
+  textPosition?: number;
+  requestId?: number;
 }
 
 export interface SaveProgressInput {
@@ -41,7 +45,7 @@ interface ReaderState {
   pendingPosition: PendingPosition | null;
 
   openBook: (bookId: string) => Promise<void>;
-  loadChapter: (chapterIndex: number, options?: OpenChapterOptions) => Promise<void>;
+  loadChapter: (chapterIndex: number, options?: OpenChapterOptions) => Promise<boolean>;
   preloadChapter: (chapterIndex: number) => void;
   consumePendingPosition: () => PendingPosition | null;
   saveProgress: (input: SaveProgressInput) => void;
@@ -67,11 +71,13 @@ function enqueueSave(bookId: string, task: () => Promise<void>): void {
   const previous = saveQueues.get(bookId) ?? Promise.resolve();
   const next = previous
     .catch(() => undefined)
-    .then(task)
-    .catch((error) => {
-      console.error("保存阅读进度失败:", error);
-    });
+    .then(task);
+  void next.catch((error) => console.error("保存阅读进度失败:", error));
   saveQueues.set(bookId, next);
+}
+
+export async function flushProgressWrites(): Promise<void> {
+  await Promise.all([...saveQueues.values()]);
 }
 
 export const useReaderStore = create<ReaderState>((set, get) => ({
@@ -91,6 +97,7 @@ export const useReaderStore = create<ReaderState>((set, get) => ({
     chapterToken += 1;
     set({
       loading: true,
+      currentChapter: null,
       error: null,
       bookId,
       chapterCount: 0,
@@ -133,7 +140,7 @@ export const useReaderStore = create<ReaderState>((set, get) => ({
 
   loadChapter: async (chapterIndex, options) => {
     const { bookId } = get();
-    if (!bookId) return;
+    if (!bookId || chapterIndex < 0 || chapterIndex >= get().chapterCount) return false;
 
     const token = ++chapterToken;
     // 注意：不清空 currentChapter。缓慢章节解析期间保留上一屏内容，
@@ -142,31 +149,36 @@ export const useReaderStore = create<ReaderState>((set, get) => ({
       loading: true,
       loadingChapter: chapterIndex,
       error: null,
-      pendingPosition: {
-        anchor: options?.anchor ?? null,
-        page: options?.page ?? null,
-        ratio: options?.ratio ?? null,
-        atEnd: options?.atEnd ?? false,
-      },
+      pendingPosition: null,
     });
 
     try {
       const chapter = await readerApi.chapter(bookId, chapterIndex);
-      if (token !== chapterToken) return;
+      if (token !== chapterToken) return false;
       set({
         currentChapter: chapter,
         loading: false,
         loadingChapter: null,
         error: null,
+        pendingPosition: {
+          anchor: options?.anchor ?? null,
+          page: options?.page ?? null,
+          ratio: options?.ratio ?? options?.anchor?.ratio ?? null,
+          atEnd: options?.atEnd ?? false,
+          textPosition: options?.textPosition,
+          requestId: options?.requestId,
+        },
       });
+      return true;
     } catch (error) {
-      if (token !== chapterToken) return;
+      if (token !== chapterToken) return false;
       // 保留 loadingChapter：重试时要知道失败的是哪一章
       set({
         loading: false,
         error: String(error),
         pendingPosition: null,
       });
+      return false;
     }
   },
 

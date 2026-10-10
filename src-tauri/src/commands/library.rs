@@ -35,6 +35,14 @@ pub async fn import_book(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<BookInfo, String> {
+    import_book_path(path, &app, &state)
+}
+
+pub fn import_book_path(
+    path: String,
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<BookInfo, String> {
     let path = PathBuf::from(&path);
 
     if !path.exists() {

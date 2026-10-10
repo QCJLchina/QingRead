@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { captureAnchor, rangeOf, resolveAnchor } from "../lib/anchor";
+import { anchorAtPlainText } from "../lib/highlight";
 import { computePagedMetrics } from "../lib/layout";
 import type { PagedMetrics } from "../lib/layout";
 import { pageCountFromWidth, pageFromOffset, pageFromRatio } from "../lib/pagination";
@@ -12,6 +13,8 @@ export interface ReaderLayoutInfo {
   pageCount: number;
   ratio: number;
   anchor: TextAnchor | null;
+  approximate?: boolean;
+  requestId?: number;
 }
 
 export type MoveResult = "moved" | "next-chapter" | "prev-chapter" | "blocked";
@@ -166,6 +169,8 @@ export function useReaderLayout(options: UseReaderLayoutOptions) {
   const timerRef = useRef<number | null>(null);
   const settledRef = useRef(false);
   const onSettledRef = useRef(onSettled);
+  const approximateRef = useRef(false);
+  const requestIdRef = useRef<number | undefined>(undefined);
   onSettledRef.current = onSettled;
 
   useEffect(() => {
@@ -178,6 +183,10 @@ export function useReaderLayout(options: UseReaderLayoutOptions) {
     const requested = pendingRef.current;
     pendingRef.current = null;
     if (requested) appliedPendingRef.current = requested;
+    if (requested) {
+      approximateRef.current = false;
+      requestIdRef.current = requested.requestId;
+    }
     return requested;
   }, []);
 
@@ -202,7 +211,7 @@ export function useReaderLayout(options: UseReaderLayoutOptions) {
     const containerRect = container.getBoundingClientRect();
     const trackRect = track.getBoundingClientRect();
     const viewport = metrics
-      ? new DOMRect(trackRect.left, trackRect.top, metrics.columnWidth, metrics.height)
+      ? new DOMRect(containerRect.left + metrics.left, containerRect.top + metrics.padding, metrics.columnWidth, metrics.height)
       : new DOMRect(
           containerRect.left + 4,
           containerRect.top + 4,
@@ -228,13 +237,16 @@ export function useReaderLayout(options: UseReaderLayoutOptions) {
   );
 
   const report = useCallback(() => {
+    captureCurrentAnchor();
     onSettledRef.current({
       page: pageRef.current,
       pageCount: pageCountRef.current,
       ratio: currentRatio(),
       anchor: anchorRef.current,
+      approximate: approximateRef.current,
+      requestId: requestIdRef.current,
     });
-  }, [currentRatio]);
+  }, [currentRatio, captureCurrentAnchor]);
 
   const resolveTargetPage = useCallback(
     (count: number, metrics: PagedMetrics): number => {
@@ -243,7 +255,9 @@ export function useReaderLayout(options: UseReaderLayoutOptions) {
 
       if (requested?.atEnd) return count - 1;
 
-      const wanted = requested?.anchor ?? anchorRef.current;
+      const wanted = track && typeof requested?.textPosition === "number"
+        ? anchorAtPlainText(track, requested.textPosition, 1)
+        : requested?.anchor ?? anchorRef.current;
       if (track && wanted) {
         const position = resolveAnchor(track, wanted);
         if (position) {
@@ -255,6 +269,8 @@ export function useReaderLayout(options: UseReaderLayoutOptions) {
           );
         }
       }
+
+      if (requested?.anchor || typeof requested?.textPosition === "number") approximateRef.current = true;
 
       if (requested && typeof requested.ratio === "number") {
         return pageFromRatio(requested.ratio, count);
@@ -279,7 +295,9 @@ export function useReaderLayout(options: UseReaderLayoutOptions) {
       return;
     }
 
-    const wanted = requested?.anchor ?? anchorRef.current;
+    const wanted = typeof requested?.textPosition === "number"
+      ? anchorAtPlainText(track, requested.textPosition, 1)
+      : requested?.anchor ?? anchorRef.current;
     if (wanted) {
       const position = resolveAnchor(track, wanted);
       if (position) {
@@ -289,6 +307,8 @@ export function useReaderLayout(options: UseReaderLayoutOptions) {
         return;
       }
     }
+
+    if (requested?.anchor || typeof requested?.textPosition === "number") approximateRef.current = true;
 
     const max = Math.max(0, container.scrollHeight - container.clientHeight);
     if (requested && typeof requested.ratio === "number") {
@@ -386,7 +406,7 @@ export function useReaderLayout(options: UseReaderLayoutOptions) {
         timerRef.current = null;
       }
     };
-  }, [reflow, ready, contentKey, mode, fontSize, lineHeight, fontFamily, contentWidth, contentPadding]);
+  }, [reflow, ready, contentKey, mode, fontSize, lineHeight, fontFamily, contentWidth, contentPadding, pending]);
 
   useEffect(() => {
     const container = containerRef.current;

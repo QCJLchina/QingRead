@@ -24,6 +24,9 @@ export interface TocEntry {
 
 export type ReaderMode = "paged" | "scroll";
 
+/** 阅读状态：未读 / 在读 / 已读。已读只能由用户手动标记。 */
+export type ReadingStatus = "unread" | "reading" | "finished";
+
 /**
  * 稳定阅读位置：指向清洗后正文里的某个字符，而不是某一页。
  * 窗口比例、字号、行距变化后页码会变，这个锚点不会。
@@ -111,6 +114,8 @@ export interface SyncAction {
   remote_exists: boolean;
   conflict_type: string | null;
   direction: string;
+  local_reading?: { status: string; bookmarks: number; history: number; updated_at: number };
+  remote_reading?: { status: string; bookmarks: number; history: number; updated_at: number };
 }
 
 export interface SyncPreview {
@@ -129,3 +134,48 @@ export interface SyncDecision {
   id: string;
   choice: "local" | "remote";
 }
+
+export interface Bookmark {
+  id: string;
+  chapter_index: number;
+  anchor: TextAnchor;
+  snippet: string;
+  note?: string | null;
+  created_at: number;
+}
+
+/** 历史事件类型：打开书、离开阅读、跳转。 */
+export type HistoryKind = "open" | "leave" | "jump";
+
+export interface HistoryEntry {
+  id: string;
+  kind: HistoryKind | string;
+  chapter_index: number;
+  anchor: TextAnchor;
+  snippet: string;
+  created_at: number;
+}
+
+/** 单本书的阅读资料。 */
+export interface ReadingData {
+  book_id: string;
+  status: ReadingStatus;
+  bookmarks: Bookmark[];
+  history: HistoryEntry[];
+  updated_at: number;
+}
+
+/** 书架筛选用的汇总。 */
+export interface ReadingSummary {
+  book_id: string;
+  status: ReadingStatus;
+  bookmark_count: number;
+  history_count: number;
+  updated_at: number;
+}
+
+/** 书架排序方式。 */
+export type LibrarySort = "recent" | "added" | "title";
+
+/** 书架状态筛选。 */
+export type LibraryFilter = "all" | "unread" | "reading" | "finished";

@@ -142,7 +142,7 @@ mod platform {
             return;
         };
         if win.is_visible().unwrap_or(false) {
-            let _ = win.hide();
+            let _ = crate::tray::hide_to_tray(app);
         } else {
             let _ = win.show();
             let _ = win.unminimize();

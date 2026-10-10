@@ -120,8 +120,7 @@ pub async fn save_window_settings(
 #[tauri::command]
 pub async fn window_hide(app: AppHandle) -> Result<(), String> {
     // 先把托盘备好，再隐藏：这是唯一的找回途径
-    crate::tray::ensure_recovery_entry(&app);
-    main_window(&app)?.hide().map_err(|e| e.to_string())
+    crate::tray::hide_to_tray(&app).map_err(|e| e.to_string())
 }
 
 /// 应用一个窗口形态：预设，或用户在面板里输入的宽高。

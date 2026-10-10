@@ -39,6 +39,169 @@ pub struct ReadingProgress {
     pub mode: Option<String>,
 }
 
+/// 阅读状态：未读 / 在读 / 已读。已读只能由用户手动标记。
+pub const READING_STATUS_UNREAD: &str = "unread";
+pub const READING_STATUS_READING: &str = "reading";
+pub const READING_STATUS_FINISHED: &str = "finished";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadingStatus {
+    Unread,
+    Reading,
+    Finished,
+}
+
+impl ReadingStatus {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            READING_STATUS_UNREAD => Some(Self::Unread),
+            READING_STATUS_READING => Some(Self::Reading),
+            READING_STATUS_FINISHED => Some(Self::Finished),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Unread => READING_STATUS_UNREAD,
+            Self::Reading => READING_STATUS_READING,
+            Self::Finished => READING_STATUS_FINISHED,
+        }
+    }
+}
+
+/// 阅读资料文件的结构版本。老文件缺少该字段时按 1 处理。
+pub const READING_DATA_VERSION: u32 = 1;
+/// 单本书保留的最近历史条数。
+pub const HISTORY_LIMIT: usize = 200;
+/// 书签备注长度上限。
+pub const BOOKMARK_NOTE_LIMIT: usize = 500;
+/// 书签正文摘要长度上限。
+pub const BOOKMARK_SNIPPET_LIMIT: usize = 120;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bookmark {
+    pub id: String,
+    pub chapter_index: usize,
+    /// 与前端 TextAnchor 同构：文本节点路径 + 字符偏移 + 摘要 + 章内比例。
+    pub anchor: serde_json::Value,
+    /// 正文摘要，用于展示和锚点失效时的回退定位。
+    pub snippet: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub id: String,
+    /// open / leave / jump：打开书、离开阅读、跳转前后。
+    pub kind: String,
+    pub chapter_index: usize,
+    pub anchor: serde_json::Value,
+    pub snippet: String,
+    pub created_at: u64,
+}
+
+/// 每本书的阅读资料，独立于 progress/<id>.json 保存，便于整体同步和冲突选择。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReadingData {
+    pub version: u32,
+    pub book_id: String,
+    pub status: String,
+    pub bookmarks: Vec<Bookmark>,
+    pub history: Vec<HistoryEntry>,
+    pub updated_at: u64,
+}
+
+impl Default for ReadingData {
+    fn default() -> Self {
+        Self {
+            version: READING_DATA_VERSION,
+            book_id: String::new(),
+            status: READING_STATUS_UNREAD.to_string(),
+            bookmarks: Vec::new(),
+            history: Vec::new(),
+            updated_at: 0,
+        }
+    }
+}
+
+impl ReadingData {
+    pub fn for_book(book_id: &str) -> Self {
+        Self {
+            book_id: book_id.to_string(),
+            ..Self::default()
+        }
+    }
+
+    /// 同一章节、相同锚点路径视为同一书签，避免重复添加。
+    pub fn find_bookmark_at(&self, chapter_index: usize, anchor: &serde_json::Value) -> Option<&Bookmark> {
+        self.bookmarks.iter().find(|b| {
+            b.chapter_index == chapter_index && same_anchor(&b.anchor, anchor)
+        })
+    }
+
+    /// 追加历史并去重：与最新一条位置相同则只替换，不新增条目。
+    pub fn push_history(&mut self, entry: HistoryEntry) {
+        if let Some(last) = self.history.first() {
+            if last.chapter_index == entry.chapter_index && same_anchor(&last.anchor, &entry.anchor) {
+                self.history[0] = entry;
+                return;
+            }
+        }
+        self.history.insert(0, entry);
+        if self.history.len() > HISTORY_LIMIT {
+            self.history.truncate(HISTORY_LIMIT);
+        }
+    }
+}
+
+/// 只比较能代表「同一处正文位置」的部分：文本节点路径 + 字符偏移。
+/// 两者都参与比较，否则同一个文本节点里的不同位置会被误判成同一处。
+fn same_anchor(left: &serde_json::Value, right: &serde_json::Value) -> bool {
+    let left_path = left.get("path").and_then(|v| v.as_array());
+    let right_path = right.get("path").and_then(|v| v.as_array());
+    let left_offset = left.get("offset").and_then(|v| v.as_u64());
+    let right_offset = right.get("offset").and_then(|v| v.as_u64());
+    left_path == right_path && left_offset == right_offset
+}
+
+fn compare_anchor(left: &serde_json::Value, right: &serde_json::Value) -> std::cmp::Ordering {
+    let path = |value: &serde_json::Value| -> Vec<u64> {
+        value.get("path").and_then(|v| v.as_array())
+            .map(|items| items.iter().filter_map(|v| v.as_u64()).collect())
+            .unwrap_or_default()
+    };
+    path(left).cmp(&path(right))
+        .then_with(|| left.get("offset").and_then(|v| v.as_u64()).unwrap_or(0)
+            .cmp(&right.get("offset").and_then(|v| v.as_u64()).unwrap_or(0)))
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn truncate_snippet(value: String) -> String {
+    truncate_chars(value, BOOKMARK_SNIPPET_LIMIT)
+}
+
+fn truncate_note(value: String) -> String {
+    truncate_chars(value, BOOKMARK_NOTE_LIMIT)
+}
+
+fn truncate_chars(value: String, limit: usize) -> String {
+    if value.chars().count() <= limit {
+        return value;
+    }
+    value.chars().take(limit).collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub theme: String,
@@ -223,6 +386,195 @@ impl Store {
         Ok(())
     }
 
+    /// 读取单本书的阅读资料。文件缺失时返回按进度推导的初始状态，不落盘。
+    pub fn load_reading_data(&self, book_id: &str) -> anyhow::Result<ReadingData> {
+        validate_book_id(book_id)?;
+        let path = self.paths.reading_data_path(book_id);
+        if path.exists() {
+            match load_json_with_backup::<ReadingData>(&path, "阅读资料") {
+                Ok(mut data) => {
+                    data.book_id = book_id.to_string();
+                    if data.version == 0 {
+                        data.version = READING_DATA_VERSION;
+                    }
+                    if ReadingStatus::parse(&data.status).is_none() {
+                        data.status = READING_STATUS_UNREAD.to_string();
+                    }
+                    return Ok(data);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(self.derived_reading_data(book_id))
+    }
+
+    /// 列表读取用的汇总：状态 + 书签数 + 历史数 + 更新时间。
+    pub fn load_all_reading_summaries(&self) -> Vec<ReadingData> {
+        let mut items: Vec<ReadingData> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&self.paths.reading_data_dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().map(|e| e == "json").unwrap_or(false) {
+                    let path = entry.path();
+                    let Some(stem) = path.file_stem().and_then(|s| s.to_str().map(str::to_string)) else {
+                        continue;
+                    };
+                    if validate_book_id(&stem).is_err() {
+                        continue;
+                    }
+                    if let Ok(data) = self.load_reading_data(&stem) {
+                        items.push(data);
+                    }
+                }
+            }
+        }
+        items
+    }
+
+    /// 阅读资料文件不存在时，按旧进度推导未读 / 在读。
+    /// 有进度记录即为「在读」；没有进度记录即为「未读」。
+    fn derived_reading_data(&self, book_id: &str) -> ReadingData {
+        let status = if self.load_progress(book_id).is_some() {
+            READING_STATUS_READING
+        } else {
+            READING_STATUS_UNREAD
+        };
+        ReadingData {
+            book_id: book_id.to_string(),
+            status: status.to_string(),
+            ..ReadingData::default()
+        }
+    }
+
+    pub fn save_reading_data(&self, data: &ReadingData) -> anyhow::Result<()> {
+        validate_book_id(&data.book_id)?;
+        if let Some(parent) = self.paths.reading_data_path(&data.book_id).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        atomic_write_json(&self.paths.reading_data_path(&data.book_id), data)?;
+        Ok(())
+    }
+
+    pub fn set_reading_status(&self, book_id: &str, status: &str) -> anyhow::Result<ReadingData> {
+        let Some(parsed) = ReadingStatus::parse(status) else {
+            return Err(anyhow::anyhow!("阅读状态不合法: {}", status));
+        };
+        let mut data = self.load_reading_data(book_id)?;
+        data.status = parsed.as_str().to_string();
+        data.version = READING_DATA_VERSION;
+        data.updated_at = now_secs();
+        self.save_reading_data(&data)?;
+        Ok(data)
+    }
+
+    /// 在持有 Store 锁时执行状态推进；已读状态不能被自动打开操作降级。
+    pub fn mark_reading_started(&self, book_id: &str) -> anyhow::Result<ReadingData> {
+        let data = self.load_reading_data(book_id)?;
+        if data.status != READING_STATUS_UNREAD {
+            return Ok(data);
+        }
+        self.set_reading_status(book_id, READING_STATUS_READING)
+    }
+
+    /// 添加书签。同一位置已有书签时返回该书签（不新增）。
+    pub fn add_bookmark(
+        &self,
+        book_id: &str,
+        chapter_index: usize,
+        anchor: serde_json::Value,
+        snippet: String,
+        note: Option<String>,
+    ) -> anyhow::Result<(ReadingData, bool)> {
+        let mut data = self.load_reading_data(book_id)?;
+        if let Some(existing) = data.find_bookmark_at(chapter_index, &anchor) {
+            let id = existing.id.clone();
+            eprintln!("[Store::add_bookmark] existing bookmark at same position: {}", id);
+            return Ok((data, false));
+        }
+        let bookmark = Bookmark {
+            id: uuid::Uuid::new_v4().to_string(),
+            chapter_index,
+            anchor,
+            snippet: truncate_snippet(snippet),
+            note: note.map(|n| truncate_note(n)),
+            created_at: now_secs(),
+        };
+        // 正文顺序：章节、文本节点路径、字符偏移。
+        data.bookmarks.push(bookmark);
+        data.bookmarks.sort_by(|a, b| {
+            a.chapter_index
+                .cmp(&b.chapter_index)
+                .then_with(|| compare_anchor(&a.anchor, &b.anchor))
+                .then(a.created_at.cmp(&b.created_at))
+        });
+        data.version = READING_DATA_VERSION;
+        data.updated_at = now_secs();
+        self.save_reading_data(&data)?;
+        Ok((data, true))
+    }
+
+    pub fn update_bookmark_note(
+        &self,
+        book_id: &str,
+        bookmark_id: &str,
+        note: Option<String>,
+    ) -> anyhow::Result<ReadingData> {
+        let mut data = self.load_reading_data(book_id)?;
+        let Some(bookmark) = data.bookmarks.iter_mut().find(|b| b.id == bookmark_id) else {
+            return Err(anyhow::anyhow!("书签不存在"));
+        };
+        bookmark.note = note.map(|n| truncate_note(n));
+        data.version = READING_DATA_VERSION;
+        data.updated_at = now_secs();
+        self.save_reading_data(&data)?;
+        Ok(data)
+    }
+
+    pub fn remove_bookmark(&self, book_id: &str, bookmark_id: &str) -> anyhow::Result<ReadingData> {
+        let mut data = self.load_reading_data(book_id)?;
+        let before = data.bookmarks.len();
+        data.bookmarks.retain(|b| b.id != bookmark_id);
+        if data.bookmarks.len() == before {
+            return Err(anyhow::anyhow!("书签不存在"));
+        }
+        data.version = READING_DATA_VERSION;
+        data.updated_at = now_secs();
+        self.save_reading_data(&data)?;
+        Ok(data)
+    }
+
+    /// 追加一条历史。位置与最新一条相同时只更新时间。
+    pub fn append_history(
+        &self,
+        book_id: &str,
+        kind: &str,
+        chapter_index: usize,
+        anchor: serde_json::Value,
+        snippet: String,
+    ) -> anyhow::Result<ReadingData> {
+        let mut data = self.load_reading_data(book_id)?;
+        data.push_history(HistoryEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            kind: kind.to_string(),
+            chapter_index,
+            anchor,
+            snippet: truncate_snippet(snippet),
+            created_at: now_secs(),
+        });
+        data.version = READING_DATA_VERSION;
+        data.updated_at = now_secs();
+        self.save_reading_data(&data)?;
+        Ok(data)
+    }
+
+    pub fn clear_history(&self, book_id: &str) -> anyhow::Result<ReadingData> {
+        let mut data = self.load_reading_data(book_id)?;
+        data.history.clear();
+        data.version = READING_DATA_VERSION;
+        data.updated_at = now_secs();
+        self.save_reading_data(&data)?;
+        Ok(data)
+    }
+
 
     /// 扫描进度目录，返回所有书的阅读进度。
     /// 用于书架上的「继续阅读」和进度显示。单本解析失败不影响其他书。
@@ -321,6 +673,12 @@ impl Store {
         if let Err(e) = remove_file_if_exists(&self.paths.progress_path(book_id)) {
             eprintln!(
                 "[Store::remove_book] failed to remove progress metadata for {}: {}",
+                book_id, e
+            );
+        }
+        if let Err(e) = remove_file_if_exists(&self.paths.reading_data_path(book_id)) {
+            eprintln!(
+                "[Store::remove_book] failed to remove reading data for {}: {}",
                 book_id, e
             );
         }
@@ -478,6 +836,259 @@ mod tests {
         std::fs::write(&store.paths.library_file, b"not json").unwrap();
 
         assert!(store.load_library_checked().is_err());
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    fn anchor_at(path: &[u64], offset: u64) -> serde_json::Value {
+        serde_json::json!({
+            "path": path,
+            "offset": offset,
+            "snippet": "x",
+            "ratio": 0.5
+        })
+    }
+
+    #[test]
+    fn reading_status_round_trips_and_rejects_unknown_values() {
+        let (store, temp) = test_store();
+
+        store
+            .set_reading_status("book-1", READING_STATUS_FINISHED)
+            .unwrap();
+        let data = store.load_reading_data("book-1").unwrap();
+        assert_eq!(data.status, READING_STATUS_FINISHED);
+
+        assert!(store.set_reading_status("book-1", "bogus").is_err());
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn reading_status_is_derived_from_progress_when_no_file_exists() {
+        let (store, temp) = test_store();
+        assert_eq!(
+            store.load_reading_data("book-1").unwrap().status,
+            READING_STATUS_UNREAD
+        );
+
+        store
+            .save_progress(&ReadingProgress {
+                book_id: "book-1".to_string(),
+                chapter_index: 0,
+                page_in_chapter: 0,
+                total_pages_read: 0,
+                last_read: 1,
+                anchor: None,
+                mode: None,
+            })
+            .unwrap();
+        assert_eq!(
+            store.load_reading_data("book-1").unwrap().status,
+            READING_STATUS_READING
+        );
+        // 推导状态不落盘
+        assert!(!store.paths.reading_data_path("book-1").exists());
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn bookmark_at_the_same_position_is_not_duplicated() {
+        let (store, temp) = test_store();
+        let anchor = anchor_at(&[1, 2], 5);
+
+        let (_, created) = store
+            .add_bookmark("book-1", 0, anchor.clone(), "片段".to_string(), None)
+            .unwrap();
+        assert!(created);
+
+        let (data, created_again) = store
+            .add_bookmark("book-1", 0, anchor.clone(), "片段".to_string(), None)
+            .unwrap();
+        assert!(!created_again);
+        assert_eq!(data.bookmarks.len(), 1);
+
+        // 不同章节视为不同书签
+        let (_, created_other) = store
+            .add_bookmark("book-1", 1, anchor, "片段".to_string(), None)
+            .unwrap();
+        assert!(created_other);
+        assert_eq!(store.load_reading_data("book-1").unwrap().bookmarks.len(), 2);
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn bookmark_note_and_snippet_are_truncated_to_limits() {
+        let (store, temp) = test_store();
+        let long_note = "笔".repeat(BOOKMARK_NOTE_LIMIT + 50);
+        let long_snippet = "词".repeat(BOOKMARK_SNIPPET_LIMIT + 50);
+
+        store
+            .add_bookmark(
+                "book-1",
+                0,
+                anchor_at(&[0], 0),
+                long_snippet,
+                Some(long_note),
+            )
+            .unwrap();
+
+        let data = store.load_reading_data("book-1").unwrap();
+        let bookmark = &data.bookmarks[0];
+        assert_eq!(bookmark.note.as_ref().unwrap().chars().count(), BOOKMARK_NOTE_LIMIT);
+        assert_eq!(bookmark.snippet.chars().count(), BOOKMARK_SNIPPET_LIMIT);
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn bookmarks_are_sorted_by_reading_order() {
+        let (store, temp) = test_store();
+        store
+            .add_bookmark("book-1", 3, anchor_at(&[0], 0), "c".to_string(), None)
+            .unwrap();
+        store
+            .add_bookmark("book-1", 1, anchor_at(&[0], 1), "a".to_string(), None)
+            .unwrap();
+        store
+            .add_bookmark("book-1", 2, anchor_at(&[0], 2), "b".to_string(), None)
+            .unwrap();
+
+        let data = store.load_reading_data("book-1").unwrap();
+        let order: Vec<usize> = data.bookmarks.iter().map(|b| b.chapter_index).collect();
+        assert_eq!(order, vec![1, 2, 3]);
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn consecutive_history_at_the_same_position_is_merged() {
+        let (store, temp) = test_store();
+        let anchor = anchor_at(&[0], 3);
+
+        store
+            .append_history("book-1", "open", 0, anchor.clone(), "a".to_string())
+            .unwrap();
+        store
+            .append_history("book-1", "jump", 0, anchor.clone(), "a".to_string())
+            .unwrap();
+
+        let data = store.load_reading_data("book-1").unwrap();
+        assert_eq!(data.history.len(), 1);
+        assert_eq!(data.history[0].kind, "jump");
+
+        store
+            .append_history("book-1", "leave", 1, anchor_at(&[0], 9), "b".to_string())
+            .unwrap();
+        assert_eq!(store.load_reading_data("book-1").unwrap().history.len(), 2);
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn history_is_capped_at_the_limit() {
+        let (store, temp) = test_store();
+        for index in 0..(HISTORY_LIMIT + 25) {
+            store
+                .append_history(
+                    "book-1",
+                    "jump",
+                    0,
+                    anchor_at(&[0], index as u64),
+                    "x".to_string(),
+                )
+                .unwrap();
+        }
+        let data = store.load_reading_data("book-1").unwrap();
+        assert_eq!(data.history.len(), HISTORY_LIMIT);
+        // 最新的在最前面
+        assert_eq!(
+            data.history[0].anchor.get("offset").unwrap().as_u64().unwrap(),
+            (HISTORY_LIMIT + 24) as u64
+        );
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn clear_history_keeps_bookmarks_and_status() {
+        let (store, temp) = test_store();
+        store
+            .set_reading_status("book-1", READING_STATUS_FINISHED)
+            .unwrap();
+        store
+            .add_bookmark("book-1", 0, anchor_at(&[0], 0), "x".to_string(), None)
+            .unwrap();
+        store
+            .append_history("book-1", "open", 0, anchor_at(&[0], 0), "x".to_string())
+            .unwrap();
+
+        let data = store.clear_history("book-1").unwrap();
+        assert!(data.history.is_empty());
+        assert_eq!(data.bookmarks.len(), 1);
+        assert_eq!(data.status, READING_STATUS_FINISHED);
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn removing_a_book_removes_its_reading_data() {
+        let (store, temp) = test_store();
+        let metadata = crate::epub::parser::BookMetadata {
+            title: "Book".to_string(),
+            author: String::new(),
+            language: String::new(),
+            publisher: String::new(),
+            description: String::new(),
+            cover_href: None,
+        };
+        store
+            .add_book_with_id("book-1", metadata, "books/book-1.epub", 0, "epub")
+            .unwrap();
+        store
+            .add_bookmark("book-1", 0, anchor_at(&[0], 0), "x".to_string(), None)
+            .unwrap();
+        assert!(store.paths.reading_data_path("book-1").exists());
+
+        store.remove_book("book-1").unwrap();
+        assert!(!store.paths.reading_data_path("book-1").exists());
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn reading_data_refuses_unsafe_book_ids() {
+        let (store, temp) = test_store();
+        assert!(store.save_reading_data(&ReadingData::for_book("../escape")).is_err());
+        assert!(store.load_reading_data("../escape").is_err());
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn auto_start_never_downgrades_finished_and_promotes_unread() {
+        let (store, temp) = test_store();
+        assert_eq!(store.mark_reading_started("book-1").unwrap().status, READING_STATUS_READING);
+        store.set_reading_status("book-1", READING_STATUS_FINISHED).unwrap();
+        let before = std::fs::read(store.paths.reading_data_path("book-1")).unwrap();
+        assert_eq!(store.mark_reading_started("book-1").unwrap().status, READING_STATUS_FINISHED);
+        assert_eq!(before, std::fs::read(store.paths.reading_data_path("book-1")).unwrap());
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn corrupt_reading_data_is_never_overwritten_by_mutation() {
+        let (store, temp) = test_store();
+        let path = store.paths.reading_data_path("book-1");
+        std::fs::write(&path, b"broken data").unwrap();
+        std::fs::write(path.with_extension("json.bak"), b"broken backup").unwrap();
+        assert!(store.mark_reading_started("book-1").is_err());
+        assert!(store.add_bookmark("book-1", 0, anchor_at(&[0], 0), "x".into(), None).is_err());
+        assert!(store.append_history("book-1", "open", 0, anchor_at(&[0], 0), "x".into()).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"broken data");
+        assert_eq!(std::fs::read(path.with_extension("json.bak")).unwrap(), b"broken backup");
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn same_chapter_bookmarks_follow_anchor_order_not_creation_order() {
+        let (store, temp) = test_store();
+        store.add_bookmark("book-1", 0, anchor_at(&[2], 10), "last".into(), None).unwrap();
+        store.add_bookmark("book-1", 0, anchor_at(&[1], 20), "first".into(), None).unwrap();
+        store.add_bookmark("book-1", 0, anchor_at(&[2], 1), "middle".into(), None).unwrap();
+        let snippets: Vec<String> = store.load_reading_data("book-1").unwrap().bookmarks.into_iter().map(|b| b.snippet).collect();
+        assert_eq!(snippets, vec!["first", "middle", "last"]);
         std::fs::remove_dir_all(temp).unwrap();
     }
 }

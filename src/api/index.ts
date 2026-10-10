@@ -7,9 +7,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AppSettings,
+  Bookmark,
   BookInfo,
   ChapterData,
+  HistoryEntry,
   ReaderMode,
+  ReadingData,
+  ReadingStatus,
+  ReadingSummary,
   ReadingProgress,
   SyncConfigData,
   SyncDecision,
@@ -63,6 +68,50 @@ export const progressApi = {
       mode: payload.mode,
     }),
 };
+
+export const readingApi = {
+  get: (bookId: string) => invoke<ReadingData>("get_reading_data", { bookId }),
+  summaries: () => invoke<ReadingSummary[]>("list_reading_summaries"),
+  setStatus: (bookId: string, status: ReadingStatus) =>
+    invoke<ReadingData>("set_reading_status", { bookId, status }),
+  markStarted: (bookId: string) => invoke<ReadingData>("mark_reading_started", { bookId }),
+  addBookmark: (payload: {
+    bookId: string;
+    chapterIndex: number;
+    anchor: TextAnchor | null;
+    snippet: string;
+    note?: string | null;
+  }) =>
+    invoke<{ data: ReadingData; created: boolean }>("add_bookmark", {
+      bookId: payload.bookId,
+      chapterIndex: payload.chapterIndex,
+      anchor: payload.anchor,
+      snippet: payload.snippet,
+      note: payload.note ?? null,
+    }),
+  updateBookmark: (bookId: string, bookmarkId: string, note: string | null) =>
+    invoke<ReadingData>("update_bookmark", { bookId, bookmarkId, note }),
+  deleteBookmark: (bookId: string, bookmarkId: string) =>
+    invoke<ReadingData>("delete_bookmark", { bookId, bookmarkId }),
+  appendHistory: (payload: {
+    bookId: string;
+    kind: "open" | "leave" | "jump";
+    chapterIndex: number;
+    anchor: TextAnchor | null;
+    snippet: string;
+  }) =>
+    invoke<ReadingData>("append_history", {
+      bookId: payload.bookId,
+      kind: payload.kind,
+      chapterIndex: payload.chapterIndex,
+      anchor: payload.anchor,
+      snippet: payload.snippet,
+    }),
+  clearHistory: (bookId: string) => invoke<ReadingData>("clear_history", { bookId }),
+};
+
+
+export type { Bookmark, HistoryEntry, ReadingData, ReadingSummary };
 
 export const settingsApi = {
   get: () => invoke<AppSettings>("get_settings"),

@@ -308,6 +308,7 @@ export default function SettingsPage() {
           </div>
           <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-muted)" }}>
             {hasPassword ? "密码已保存" : "未保存密码"}
+            <div>新版统一同步目录：{remoteDir}/qingread-sync-v2/。首次同步上传本机数据，旧远端目录保留。</div>
           </div>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 16 }}>
             <button
@@ -422,6 +423,16 @@ export default function SettingsPage() {
                       <div style={{ minWidth: 220, flex: 1 }}>
                         <div style={{ fontSize: 14, fontWeight: 500, wordBreak: "break-all" }}>
                           {action.label}
+                          {(action.local_reading || action.remote_reading) && (
+                            <div style={{ fontSize: 12, fontWeight: 400, marginTop: 6 }}>
+                              {([["本地", action.local_reading], ["远端", action.remote_reading]] as const).map(([label, data]) => (
+                                <div key={label}>
+                                  {label}：{data ? (data.status === "finished" ? "已读" : data.status === "reading" ? "在读" : "未读") + " · " + data.bookmarks + " 个书签 · " + data.history + " 条历史 · " + formatTime(data.updated_at) : "无资料"}
+                                </div>
+                              ))}
+                              <div>未选一侧的独有记录会被替换。</div>
+                            </div>
+                          )}
                         </div>
                         <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
                           {kindLabels[action.kind] ?? action.kind} · {formatBytes(action.size)} ·{" "}

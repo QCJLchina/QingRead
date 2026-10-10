@@ -23,6 +23,10 @@ interface ReaderToolbarProps {
   onCurtain: () => void;
   onHideWindow: () => void;
   onRestoreToolbar: () => void;
+  onAddBookmark: () => void;
+  onOpenBookmarks: () => void;
+  onOpenHistory: () => void;
+  hasBookmarkHere: boolean;
 }
 
 export default function ReaderToolbar(props: ReaderToolbarProps) {
@@ -47,6 +51,10 @@ export default function ReaderToolbar(props: ReaderToolbarProps) {
     onCurtain,
     onHideWindow,
     onRestoreToolbar,
+    onAddBookmark,
+    onOpenBookmarks,
+    onOpenHistory,
+    hasBookmarkHere,
   } = props;
 
   if (hidden) {
@@ -84,6 +92,49 @@ export default function ReaderToolbar(props: ReaderToolbarProps) {
       </div>
 
       <div className="toolbar-group">
+        {narrow && (
+          <details className="toolbar-menu">
+            <summary className="icon-button" aria-label="更多阅读操作">⋯</summary>
+            <div className="toolbar-menu-items" onClick={(event) => {
+              const details = event.currentTarget.closest("details");
+              if (details) details.open = false;
+            }}>
+              <button onClick={onAddBookmark}>添加书签</button>
+              <button onClick={onOpenBookmarks}>书签列表</button>
+              <button onClick={onOpenHistory}>阅读历史</button>
+              <button onClick={() => onOpenPanel("search")}>搜索</button>
+              <button onClick={onToggleMode}>切换阅读方式</button>
+              <button onClick={() => onOpenPanel("reading")}>阅读设置</button>
+              <button onClick={() => onOpenPanel("window")}>窗口尺寸</button>
+              <button onClick={onToggleAlwaysOnTop}>切换置顶</button>
+              <button onClick={onToggleLowDistraction}>低干扰模式</button>
+              <button onClick={onCurtain}>遮挡正文</button>
+              <button onClick={onHideWindow}>隐藏窗口</button>
+            </div>
+          </details>
+        )}
+        {!narrow && <>
+        <button
+          className="icon-button"
+          onClick={onAddBookmark}
+          title={hasBookmarkHere ? "此处已有书签" : "添加书签"}
+        >
+          <Icon name="bookmark" />
+        </button>
+        <button
+          className={"icon-button" + (panel === "bookmarks" ? " is-active" : "")}
+          onClick={() => onOpenPanel("bookmarks")}
+          title="书签列表"
+        >
+          <Icon name="list" />
+        </button>
+        <button
+          className={"icon-button" + (panel === "history" ? " is-active" : "")}
+          onClick={() => onOpenPanel("history")}
+          title="阅读历史"
+        >
+          <Icon name="clock" />
+        </button>
         <button
           className="icon-button"
           onClick={onToggleMode}
@@ -136,6 +187,7 @@ export default function ReaderToolbar(props: ReaderToolbarProps) {
             <Icon name="minus" />
           </button>
         )}
+        </>}
       </div>
     </div>
   );
